@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -5,8 +6,15 @@ __pycache__/
 venv/
 .venv/
 *.egg-info/
-dist/
-build/
-.DS_Store
 *.log
-data/cache/
+bot/data/cache/
+
+# Next.js
+.next/
+node_modules/
+.env.local
+.env*.local
+out/
+
+# Misc
+.DS_Store

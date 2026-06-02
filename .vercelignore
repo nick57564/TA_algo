@@ -1,8 +1,1 @@
-main.py
-logger.py
-config.py
-requirements.txt
-data/
-analysis/
-backtest/
-risk/
+bot/
