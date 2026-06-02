@@ -1,243 +1,147 @@
 "use client";
+import { useEffect, useState } from "react";
+import EquityChart from "@/components/EquityChart";
+import StatCard from "@/components/StatCard";
+import type { BotEvent, BotStatus, BacktestResult, TradeEvent } from "@/lib/types";
 
-import { useEffect, useRef, useState } from "react";
-import type { BotEvent, TradeEvent } from "@/lib/types";
+const fmt = (n: number, d = 2) => n.toFixed(d);
+const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString("en-AU", { hour12: false });
+const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "short" });
 
-const POLL_MS = 3000;
+const KIND: Record<string, { bg: string; color: string; label: string }> = {
+  entry:     { bg: "rgba(16,185,129,.15)",  color: "var(--green)",  label: "ENTRY" },
+  exit:      { bg: "rgba(59,130,246,.15)",  color: "var(--blue)",   label: "EXIT" },
+  signal:    { bg: "rgba(245,158,11,.15)",  color: "var(--yellow)", label: "SIGNAL" },
+  breakeven: { bg: "rgba(139,92,246,.15)",  color: "var(--purple)", label: "B/E" },
+  error:     { bg: "rgba(239,68,68,.15)",   color: "var(--red)",    label: "ERROR" },
+  info:      { bg: "rgba(71,85,105,.25)",   color: "var(--muted)",  label: "INFO" },
+};
 
-function isTrade(e: BotEvent): e is TradeEvent {
-  return e.kind === "entry" || e.kind === "exit";
+function Badge({ kind }: { kind: string }) {
+  const s = KIND[kind] ?? KIND.info;
+  return <span className="px-1.5 py-0.5 rounded text-[10px] font-bold num tracking-wider" style={{ background: s.bg, color: s.color }}>{s.label}</span>;
 }
-
-function kindBadge(kind: BotEvent["kind"]) {
-  const base = "px-1.5 py-0.5 rounded text-xs font-bold uppercase tracking-wide";
-  switch (kind) {
-    case "entry":     return `${base} bg-emerald-900 text-emerald-300`;
-    case "exit":      return `${base} bg-sky-900 text-sky-300`;
-    case "signal":    return `${base} bg-yellow-900 text-yellow-300`;
-    case "breakeven": return `${base} bg-purple-900 text-purple-300`;
-    case "error":     return `${base} bg-red-900 text-red-300`;
-    default:          return `${base} bg-slate-800 text-slate-400`;
-  }
-}
-
-function kindColor(kind: BotEvent["kind"]) {
-  switch (kind) {
-    case "entry":     return "text-emerald-400";
-    case "exit":      return "text-sky-400";
-    case "signal":    return "text-yellow-400";
-    case "breakeven": return "text-purple-400";
-    case "error":     return "text-red-400";
-    default:          return "text-slate-400";
-  }
-}
-
-function fmt(n: number, decimals = 2) {
-  return n.toFixed(decimals);
-}
-
-function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-AU", { hour12: false });
-}
-
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "short" });
-}
-
-function EquityChart({ points }: { points: number[] }) {
-  const W = 600, H = 120, PAD = 8;
-  if (points.length < 2) {
-    return (
-      <div className="flex items-center justify-center h-[120px] text-slate-600 text-sm">
-        Waiting for trades…
-      </div>
-    );
-  }
-  const min = Math.min(...points);
-  const max = Math.max(...points);
-  const range = max - min || 1;
-  const xs = points.map((_, i) => PAD + (i / (points.length - 1)) * (W - PAD * 2));
-  const ys = points.map((v) => H - PAD - ((v - min) / range) * (H - PAD * 2));
-  const d = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x},${ys[i]}`).join(" ");
-  const fill = [...xs.map((x, i) => `${i === 0 ? "M" : "L"}${x},${ys[i]}`),
-    `L${xs[xs.length - 1]},${H} L${xs[0]},${H} Z`].join(" ");
-  const positive = (points[points.length - 1] ?? 0) >= points[0];
-  const stroke = positive ? "#34d399" : "#f87171";
-  const fillColor = positive ? "rgba(52,211,153,0.08)" : "rgba(248,113,113,0.08)";
+function Pill({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[120px]" preserveAspectRatio="none">
-      <path d={fill} fill={fillColor} />
-      <path d={d} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" />
-      <circle cx={xs[xs.length - 1]} cy={ys[ys.length - 1]} r="3" fill={stroke} />
-    </svg>
+    <span className="flex items-center gap-1.5">
+      <span className="text-xs" style={{ color: "var(--muted)" }}>{label}</span>
+      <span className="text-xs font-semibold num" style={{ color: color ?? "var(--text)" }}>{value}</span>
+    </span>
   );
 }
 
-function StatCard({ label, value, color }: { label: string; value: string; color?: "emerald" | "red" }) {
-  const valColor = color === "emerald" ? "text-emerald-400" : color === "red" ? "text-red-400" : "text-slate-100";
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-3">
-      <p className="text-slate-500 text-xs uppercase tracking-widest mb-1">{label}</p>
-      <p className={`text-xl font-bold ${valColor}`}>{value}</p>
-    </div>
-  );
-}
-
-function Stats({ events }: { events: BotEvent[] }) {
-  const exits = events.filter((e) => e.kind === "exit") as TradeEvent[];
-  const entries = events.filter((e) => e.kind === "entry") as TradeEvent[];
-  if (exits.length === 0 && entries.length === 0) return null;
-
-  const wins = exits.filter((e) => e.data.pnl != null && e.data.pnl > 0);
-  const winrate = exits.length ? (wins.length / exits.length) * 100 : 0;
-  const totalPnl = exits.reduce((acc, e) => acc + (e.data.pnl ?? 0), 0);
-  const latestEquity = exits[0]?.data.equity;
-
-  const openTrade = entries.find((e) => {
-    const entryTs = new Date(e.ts).getTime();
-    return !exits.some((x) => new Date(x.ts).getTime() > entryTs);
-  });
-
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-      <StatCard label="Closed trades" value={String(exits.length)} />
-      <StatCard label="Win rate" value={exits.length ? `${fmt(winrate, 1)}%` : "—"} color={winrate >= 50 ? "emerald" : "red"} />
-      <StatCard label="Net P&L" value={exits.length ? `$${fmt(totalPnl)}` : "—"} color={totalPnl >= 0 ? "emerald" : "red"} />
-      <StatCard label="Equity" value={latestEquity != null ? `$${fmt(latestEquity)}` : "—"} />
-      {openTrade && (
-        <div className="col-span-2 sm:col-span-4 bg-emerald-950 border border-emerald-700 rounded-lg px-4 py-3 flex items-center gap-3">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-emerald-300 text-sm font-semibold">
-            OPEN {openTrade.data.direction?.toUpperCase()} @${fmt(openTrade.data.entry_price ?? 0)}
-            {" — "}SL ${fmt(openTrade.data.stop_loss ?? 0)} / TP ${fmt(openTrade.data.take_profit ?? 0)}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LogRow({ event }: { event: BotEvent }) {
-  const trade = isTrade(event) ? event : null;
-  return (
-    <div className="flex gap-3 items-start py-2.5 border-b border-slate-800 hover:bg-slate-900/50 px-1 transition-colors">
-      <div className="w-[70px] shrink-0 text-right">
-        <p className="text-slate-500 text-xs">{fmtDate(event.ts)}</p>
-        <p className="text-slate-400 text-xs">{fmtTime(event.ts)}</p>
-      </div>
-      <div className="w-[72px] shrink-0 pt-0.5">
-        <span className={kindBadge(event.kind)}>{event.kind}</span>
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm ${kindColor(event.kind)}`}>{event.message}</p>
-        {trade?.data && (
-          <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-slate-500">
-            {trade.data.symbol && <span>{trade.data.symbol}</span>}
-            {trade.data.timeframe && <span>{trade.data.timeframe}</span>}
-            {trade.data.direction && (
-              <span className={trade.data.direction === "long" ? "text-emerald-500" : "text-red-500"}>
-                {trade.data.direction.toUpperCase()}
-              </span>
-            )}
-            {trade.data.entry_price != null && <span>entry ${fmt(trade.data.entry_price)}</span>}
-            {trade.data.exit_price != null && <span>exit ${fmt(trade.data.exit_price)}</span>}
-            {trade.data.pnl != null && (
-              <span className={trade.data.pnl >= 0 ? "text-emerald-400" : "text-red-400"}>
-                {trade.data.pnl >= 0 ? "+" : ""}${fmt(trade.data.pnl)}
-                {trade.data.pnl_pct != null ? ` (${fmt(trade.data.pnl_pct * 100, 2)}%)` : ""}
-              </span>
-            )}
-            {trade.data.exit_reason && (
-              <span className="uppercase text-slate-600">{trade.data.exit_reason}</span>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export default function Dashboard() {
+export default function Overview() {
   const [events, setEvents] = useState<BotEvent[]>([]);
-  const [lastPoll, setLastPoll] = useState<Date | null>(null);
-  const [live, setLive] = useState(true);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [status, setStatus] = useState<BotStatus | null>(null);
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const [live, setLive]     = useState(true);
+  const [lastPoll, setLP]   = useState<Date | null>(null);
 
   async function poll() {
-    try {
-      const res = await fetch("/api/events", { cache: "no-store" });
-      if (res.ok) {
-        setEvents(await res.json());
-        setLastPoll(new Date());
-      }
-    } catch { /* keep last data on network error */ }
+    const [ev, st, bt] = await Promise.all([
+      fetch("/api/events",  { cache: "no-store" }).then(r => r.json()).catch(() => []),
+      fetch("/api/status",  { cache: "no-store" }).then(r => r.json()).catch(() => null),
+      fetch("/api/backtest",{ cache: "no-store" }).then(r => r.json()).catch(() => null),
+    ]);
+    setEvents(ev); setStatus(st); setResult(bt); setLP(new Date());
   }
 
   useEffect(() => {
     poll();
-    if (live) intervalRef.current = setInterval(poll, POLL_MS);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    if (!live) return;
+    const id = setInterval(poll, 3000);
+    return () => clearInterval(id);
   }, [live]);
 
-  const exitEvents = [...events].reverse().filter((e) => e.kind === "exit") as TradeEvent[];
-  const equityCurve = [10_000, ...exitEvents.map((e) => e.data.equity ?? 10_000)];
+  const exits   = events.filter(e => e.kind === "exit")  as TradeEvent[];
+  const entries = events.filter(e => e.kind === "entry") as TradeEvent[];
+  const pnl     = exits.reduce((a, e) => a + (e.data.pnl ?? 0), 0);
+  const wins    = exits.filter(e => (e.data.pnl ?? 0) > 0).length;
+  const wr      = exits.length ? (wins / exits.length) * 100 : 0;
+  const curve   = result?.equity_curve?.length
+    ? result.equity_curve
+    : [10000, ...[...exits].reverse().map(e => e.data.equity ?? 10000)];
+  const openTrade = entries.find(e => !exits.some(x => new Date(x.ts) > new Date(e.ts)));
 
   return (
-    <main className="min-h-screen bg-[#0b0f17] text-slate-200 px-4 py-6 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-6 space-y-5">
+      {/* Header */}
+      <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white tracking-tight">
-            TA Algo <span className="text-slate-500 font-normal">/ BTC H&amp;S Strategy</span>
-          </h1>
-          <p className="text-slate-500 text-xs mt-0.5">
+          <h1 className="text-xl font-bold">Overview</h1>
+          <p className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
             {lastPoll ? `Updated ${fmtTime(lastPoll.toISOString())}` : "Connecting…"}
           </p>
         </div>
-        <div className="flex gap-2 items-center">
-          <button
-            onClick={() => setLive((v) => !v)}
-            className={`text-xs px-3 py-1.5 rounded border font-semibold transition-colors ${
-              live ? "border-emerald-700 bg-emerald-950 text-emerald-400" : "border-slate-700 bg-slate-900 text-slate-400"
-            }`}
-          >
+        <div className="flex gap-2">
+          <button onClick={() => setLive(v => !v)} className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all" style={{ background: live ? "var(--blue-dim)" : "var(--card)", border: `1px solid ${live ? "var(--blue)" : "var(--border)"}`, color: live ? "var(--blue)" : "var(--muted)" }}>
             {live ? "● LIVE" : "○ PAUSED"}
           </button>
-          <button onClick={poll} className="text-xs px-3 py-1.5 rounded border border-slate-700 bg-slate-900 text-slate-400 hover:text-white transition-colors">
-            Refresh
-          </button>
+          <button onClick={poll} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--muted)" }}>↻</button>
         </div>
       </div>
 
-      <Stats events={events} />
-
-      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 mb-6">
-        <p className="text-slate-500 text-xs uppercase tracking-widest mb-3">Equity curve</p>
-        <EquityChart points={equityCurve} />
-        <div className="flex justify-between text-xs text-slate-600 mt-1">
-          <span>Start $10,000</span>
-          <span>Current ${fmt(equityCurve[equityCurve.length - 1] ?? 10_000)}</span>
+      {/* Status bar */}
+      {status && (
+        <div className="rounded-xl px-4 py-3 flex items-center gap-5 flex-wrap" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
+          <span className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${status.running ? "pulse" : ""}`} style={{ background: status.running ? "var(--green)" : "var(--muted)" }} />
+            <span className="text-sm font-medium">{status.running ? "Running" : "Idle"}</span>
+          </span>
+          <Pill label="Mode"   value={status.mode.toUpperCase()} />
+          <Pill label="Symbol" value={status.symbol} />
+          <Pill label="TF"     value={status.timeframe} />
+          <Pill label="Broker" value={status.broker_connected ? `${status.broker} ✓` : "Not connected"} color={status.broker_connected ? "var(--green)" : "var(--muted)"} />
         </div>
+      )}
+
+      {/* Open trade */}
+      {openTrade && (
+        <div className="rounded-xl px-4 py-3 slide-in flex items-center gap-3" style={{ background: "rgba(16,185,129,.07)", border: "1px solid rgba(16,185,129,.3)" }}>
+          <span className="w-2 h-2 rounded-full pulse" style={{ background: "var(--green)" }} />
+          <span className="text-sm font-semibold num" style={{ color: "var(--green)" }}>
+            OPEN {openTrade.data.direction?.toUpperCase()} · Entry ${fmt(openTrade.data.entry_price ?? 0)} · SL ${fmt(openTrade.data.stop_loss ?? 0)} · TP ${fmt(openTrade.data.take_profit ?? 0)}
+          </span>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Net P&L"  value={`$${fmt(pnl)}`} color={pnl >= 0 ? "green" : "red"} glow={Math.abs(pnl) > 0} />
+        <StatCard label="Win Rate" value={exits.length ? `${fmt(wr, 1)}%` : "—"} color={wr >= 50 ? "green" : exits.length ? "red" : "default"} />
+        <StatCard label="Trades"   value={String(exits.length)} sub={`${wins}W · ${exits.length - wins}L`} />
+        <StatCard label="Equity"   value={`$${fmt(curve[curve.length - 1] ?? 10000)}`} color="blue" />
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-lg">
-        <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-          <p className="text-slate-400 text-xs uppercase tracking-widest">
-            Event log <span className="text-slate-600">({events.length})</span>
-          </p>
-          <p className="text-slate-600 text-xs">refreshes every {POLL_MS / 1000}s</p>
+      {/* Chart */}
+      <div className="rounded-xl p-5" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
+        <div className="flex justify-between items-center mb-4">
+          <p className="text-sm font-semibold">Equity Curve</p>
+          <p className="text-xs num" style={{ color: "var(--muted)" }}>$10,000 → ${fmt(curve[curve.length - 1] ?? 10000)}</p>
         </div>
-        <div className="px-2">
-          {events.length === 0 ? (
-            <div className="py-12 text-center text-slate-600 text-sm">
-              No events yet — start the bot and they will appear here.
-              <br />
-              <code className="text-slate-500 text-xs mt-1 block">python main.py --tf 4h</code>
+        <EquityChart points={curve} height={160} />
+      </div>
+
+      {/* Event log (last 20) */}
+      <div className="rounded-xl overflow-hidden" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
+        <div className="px-5 py-3 flex justify-between items-center" style={{ borderBottom: "1px solid var(--border)" }}>
+          <p className="text-sm font-semibold">Recent Events</p>
+          <span className="text-xs num px-2 py-0.5 rounded" style={{ background: "var(--dim)", color: "var(--muted)" }}>{events.length}</span>
+        </div>
+        {events.length === 0
+          ? <div className="py-14 text-center text-sm" style={{ color: "var(--muted)" }}>No events yet<br /><code className="text-xs mt-1 block opacity-50">cd bot && python main.py --tf 4h</code></div>
+          : events.slice(0, 20).map(e => (
+            <div key={e.id} className="flex gap-3 items-start px-5 py-3 hover:bg-white/[.02] transition-colors" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="w-16 shrink-0 text-right">
+                <p className="text-[10px] num" style={{ color: "var(--muted)" }}>{fmtDate(e.ts)}</p>
+                <p className="text-[10px] num" style={{ color: "var(--muted)" }}>{fmtTime(e.ts)}</p>
+              </div>
+              <div className="w-14 shrink-0 pt-0.5"><Badge kind={e.kind} /></div>
+              <p className="text-sm flex-1" style={{ color: KIND[e.kind]?.color ?? "var(--text)" }}>{e.message}</p>
             </div>
-          ) : (
-            events.map((e) => <LogRow key={e.id} event={e} />)
-          )}
-        </div>
+          ))
+        }
       </div>
-    </main>
+    </div>
   );
 }
