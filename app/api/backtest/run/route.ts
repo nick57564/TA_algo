@@ -114,11 +114,16 @@ function isAligned(
   trendW: Trend,
   trend4h: Trend,
   emaBias: "long" | "short",
-): boolean {
-  const dir = emaBias === "long" ? "bullish" : "bearish";
+): { ok: boolean; combo: string } {
+  const dir   = emaBias === "long" ? "bullish" : "bearish";
   const wdOk  = trendW === dir && trendD === dir;
   const d4hOk = trendD === dir && trend4h === dir;
-  return wdOk || d4hOk;
+  const dOnly = trendD === dir; // daily alone is enough if 4H is neutral
+  if (wdOk && d4hOk) return { ok: true, combo: "Weekly + Daily + 4H" };
+  if (wdOk)          return { ok: true, combo: "Weekly + Daily" };
+  if (d4hOk)         return { ok: true, combo: "Daily + 4H" };
+  if (dOnly)         return { ok: true, combo: "Daily" };
+  return { ok: false, combo: "" };
 }
 
 // ── Entry detection (engulfing on retest) ─────────────────────────────────────
@@ -271,14 +276,10 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[]; u
     const trendD  = statesD[dIdx]?.trend  ?? "neutral";
     const trendH4 = statesH4[h4Idx]?.trend ?? "neutral";
 
-    if (!isAligned(trendD, trendW, trendH4, emaBias)) continue;
+    const aligned = isAligned(trendD, trendW, trendH4, emaBias);
+    if (!aligned.ok) continue;
 
     const dir = emaBias === "long" ? "bullish" : "bearish";
-
-    // Which MTF combo aligned?
-    const wdOk  = trendW === dir && trendD === dir;
-    const d4hOk = trendD === dir && trendH4 === dir;
-    const mtfDesc = wdOk && d4hOk ? "W+D+4H" : wdOk ? "W+D" : "D+4H";
 
     // ── Entry: engulfing on retest ──
     if (!isEngulfing(prevH1, candle, dir)) continue;
@@ -286,10 +287,12 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[]; u
     const level = dir === "bullish" ? state1h.activeHL : state1h.activeLH;
     if (!nearLevel(candle, level, dir)) continue;
 
-    const engulfType = dir === "bullish" ? "Bullish engulfing" : "Bearish engulfing";
-    const levelLabel = dir === "bullish" ? "HL" : "LH";
-    const maRelation = dir === "bullish" ? "above 200 SMA" : "below 200 SMA";
-    const entryReason = `${engulfType} on ${levelLabel} retest @ $${level.toFixed(0)} · ${mtfDesc} aligned · ${maRelation}`;
+    // Plain-English trigger description
+    const side       = dir === "bullish" ? "BUY" : "SELL";
+    const candleType = dir === "bullish" ? "green candle swallowed the previous red one" : "red candle swallowed the previous green one";
+    const levelWord  = dir === "bullish" ? "support" : "resistance";
+    const maSide     = dir === "bullish" ? "above" : "below";
+    const entryReason = `${side} signal: A ${candleType} right at a ${levelWord} level ($${level.toFixed(0)}). Price is ${maSide} the 200-day average and ${aligned.combo} timeframes all agree on direction.`;
 
     // ── Size & levels ──
     const slPrice = dir === "bullish"
