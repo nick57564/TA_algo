@@ -279,7 +279,7 @@ export default function BacktestPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--dim)" }}>
-                    {["#","Dir","Entry date","Exit date","Entry $","Exit $","P&L","Reason"].map(h => (
+                    {["#","Dir","Entry date","Exit date","Entry $","Exit $","P&L","Exit","Trigger"].map(h => (
                       <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</th>
                     ))}
                   </tr>
@@ -309,9 +309,12 @@ export default function BacktestPage() {
                           {t.exit_reason?.toUpperCase()}
                         </span>
                       </td>
+                      <td style={{ padding: "9px 14px", fontSize: 11, color: "var(--muted)", maxWidth: 340 }}>
+                        {t.entry_reason ?? "—"}
+                      </td>
                     </tr>
                   )) : (
-                    <tr><td colSpan={8} style={{ padding: 32, textAlign: "center", color: "var(--muted)" }}>Run backtest to see individual trades here</td></tr>
+                    <tr><td colSpan={9} style={{ padding: 32, textAlign: "center", color: "var(--muted)" }}>Run backtest to see individual trades here</td></tr>
                   )}
                 </tbody>
               </table>

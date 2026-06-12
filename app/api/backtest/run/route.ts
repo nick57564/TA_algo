@@ -157,6 +157,7 @@ interface Trade {
   slPrice: number;    tpPrice: number;
   pnl: number;        size: number;
   exitReason: "tp" | "sl" | "eod";
+  entryReason: string;
 }
 
 interface Signal {
@@ -234,11 +235,21 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
 
     const dir = emaBias === "long" ? "bullish" : "bearish";
 
+    // Which MTF combo aligned?
+    const wdOk  = trendW === dir && trendD === dir;
+    const d4hOk = trendD === dir && trendH4 === dir;
+    const mtfDesc = wdOk && d4hOk ? "W+D+4H" : wdOk ? "W+D" : "D+4H";
+
     // ── Entry: engulfing on retest ──
     if (!isEngulfing(prevH1, candle, dir)) continue;
 
     const level = dir === "bullish" ? state1h.activeHL : state1h.activeLH;
     if (!nearLevel(candle, level, dir)) continue;
+
+    const engulfType = dir === "bullish" ? "Bullish engulfing" : "Bearish engulfing";
+    const levelLabel = dir === "bullish" ? "HL" : "LH";
+    const maRelation = dir === "bullish" ? "above 200 SMA" : "below 200 SMA";
+    const entryReason = `${engulfType} on ${levelLabel} retest @ $${level.toFixed(0)} · ${mtfDesc} aligned · ${maRelation}`;
 
     // ── Size & levels ──
     const slPrice = dir === "bullish"
@@ -258,6 +269,7 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
       entryTime: candle.time, exitTime: 0,
       slPrice, tpPrice, size,
       pnl: 0, exitReason: "eod",
+      entryReason,
     };
     open = trade;
 
@@ -324,8 +336,9 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
       exit_price:  t.exitPrice,
       entry_time:  new Date(t.entryTime).toISOString(),
       exit_time:   new Date(t.exitTime).toISOString(),
-      exit_reason: t.exitReason,
-      pnl:         +t.pnl.toFixed(2),
+      exit_reason:  t.exitReason,
+      entry_reason: t.entryReason,
+      pnl:          +t.pnl.toFixed(2),
       size:        +t.size.toFixed(6),
       sl_price:    t.slPrice,
       tp_price:    t.tpPrice,
