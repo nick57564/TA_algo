@@ -68,13 +68,15 @@ export default function BacktestPage() {
   })) ?? [];
   const months = result ? Object.entries(result.monthly_returns ?? {}).sort() : [];
 
-  // 200-period SMA from loaded candles
+  // 200-period SMA — expanding window for first 199 bars so the line covers the full chart
   const ma200: MAPoint[] = [];
-  if (candles.length >= 200) {
-    for (let i = 199; i < candles.length; i++) {
-      const slice = candles.slice(i - 199, i + 1);
-      const avg = slice.reduce((s, c) => s + Number(c.c), 0) / 200;
-      ma200.push({ time: candles[i].t, value: avg });
+  {
+    let sum = 0;
+    for (let i = 0; i < candles.length; i++) {
+      sum += Number(candles[i].c);
+      if (i >= 200) sum -= Number(candles[i - 200].c);
+      const period = Math.min(i + 1, 200);
+      ma200.push({ time: candles[i].t, value: sum / period });
     }
   }
 
