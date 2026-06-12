@@ -276,23 +276,15 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[]; u
     const trendD  = statesD[dIdx]?.trend  ?? "neutral";
     const trendH4 = statesH4[h4Idx]?.trend ?? "neutral";
 
-    const aligned = isAligned(trendD, trendW, trendH4, emaBias);
-    if (!aligned.ok) continue;
-
     const dir = emaBias === "long" ? "bullish" : "bearish";
 
-    // ── Entry: engulfing on retest ──
+    // ── Entry: engulfing candle (200 SMA sets the side, that's the only filter) ──
     if (!isEngulfing(prevH1, candle, dir)) continue;
 
-    const level = dir === "bullish" ? state1h.activeHL : state1h.activeLH;
-    if (!nearLevel(candle, level, dir)) continue;
-
-    // Plain-English trigger description
     const side       = dir === "bullish" ? "BUY" : "SELL";
     const candleType = dir === "bullish" ? "green candle swallowed the previous red one" : "red candle swallowed the previous green one";
-    const levelWord  = dir === "bullish" ? "support" : "resistance";
     const maSide     = dir === "bullish" ? "above" : "below";
-    const entryReason = `${side} signal: A ${candleType} right at a ${levelWord} level ($${level.toFixed(0)}). Price is ${maSide} the 200-day average and ${aligned.combo} timeframes all agree on direction.`;
+    const entryReason = `${side} signal: A ${candleType}. Price is ${maSide} the 200-day moving average.`;
 
     // ── Size & levels ──
     const slPrice = dir === "bullish"
