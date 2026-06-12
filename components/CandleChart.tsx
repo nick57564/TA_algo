@@ -5,10 +5,12 @@ import {
   ColorType,
   CrosshairMode,
   CandlestickSeries,
+  LineSeries,
   createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
   type CandlestickData,
+  type LineData,
   type SeriesMarker,
   type Time,
 } from "lightweight-charts";
@@ -29,13 +31,17 @@ export interface SignalMarker {
   price: number;
 }
 
+export interface MAPoint { time: number; value: number; }
+
 interface Props {
   candles: Candle[];
   signals?: SignalMarker[];
+  maLine?: MAPoint[];
+  maLabel?: string;
   height?: number;
 }
 
-export default function CandleChart({ candles, signals = [], height = 500 }: Props) {
+export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", height = 500 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -95,6 +101,21 @@ export default function CandleChart({ candles, signals = [], height = 500 }: Pro
       .sort((a, b) => (a.time as number) - (b.time as number));
 
     series.setData(data);
+
+    // 200-day MA line
+    if (maLine && maLine.length > 0) {
+      const maSeries = chart.addSeries(LineSeries, {
+        color: "#f59e0b",
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        title: maLabel,
+      });
+      const maData: LineData[] = maLine
+        .map(p => ({ time: Math.floor(p.time / 1000) as Time, value: p.value }))
+        .sort((a, b) => (a.time as number) - (b.time as number));
+      maSeries.setData(maData);
+    }
 
     // Add signal markers
     if (signals.length > 0) {

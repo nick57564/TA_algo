@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import StatCard from "@/components/StatCard";
 import type { BacktestResult } from "@/lib/types";
-import type { Candle, SignalMarker } from "@/components/CandleChart";
+import type { Candle, SignalMarker, MAPoint } from "@/components/CandleChart";
 
 const CandleChart = dynamic(() => import("@/components/CandleChart"), { ssr: false });
 
@@ -66,6 +66,19 @@ export default function BacktestPage() {
     price:     s.price,
   })) ?? [];
   const months = result ? Object.entries(result.monthly_returns ?? {}).sort() : [];
+
+  // 200-period SMA from loaded candles
+  const ma200: MAPoint[] = [];
+  if (candles.length >= 200) {
+    for (let i = 199; i < candles.length; i++) {
+      const slice = candles.slice(i - 199, i + 1);
+      const avg = slice.reduce((s, c) => s + Number(c.c), 0) / 200;
+      ma200.push({ time: candles[i].t, value: avg });
+    }
+  }
+
+  const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
+  const shorts = result?.trades?.filter((t: { direction: string }) => t.direction === "short").length ?? 0;
 
   return (
     <div style={{ padding: 28, maxWidth: 1200 }}>
@@ -176,15 +189,25 @@ export default function BacktestPage() {
             {loading && <span style={{ fontSize: 11, color: "var(--muted)" }}>Loading…</span>}
             {markers.length > 0 && (
               <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 5, background: "rgba(59,130,246,.1)", color: "#60a5fa", border: "1px solid rgba(59,130,246,.2)" }}>
-                {markers.filter(m => m.type === "Entry").length} signals found
+                {markers.filter(m => m.type === "Entry").length} signals
               </span>
+            )}
+            {result && longs + shorts > 0 && (
+              <>
+                <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 5, background: "rgba(16,185,129,.1)", color: "#10b981", border: "1px solid rgba(16,185,129,.2)" }}>
+                  {longs} long
+                </span>
+                <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 5, background: "rgba(239,68,68,.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,.2)" }}>
+                  {shorts} short
+                </span>
+              </>
             )}
           </div>
           <span style={{ fontSize: 11, color: "var(--muted)" }}>{candles.length} candles · Hyperliquid</span>
         </div>
 
         {candles.length > 0 ? (
-          <CandleChart candles={candles} signals={markers} height={480} />
+          <CandleChart candles={candles} signals={markers} maLine={ma200} maLabel="200 MA" height={480} />
         ) : (
           <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
             <div style={{ width: 32, height: 32, border: "2px solid var(--blue)", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -221,7 +244,7 @@ export default function BacktestPage() {
                 <StatCard label="Net P&L"       value={`$${fmt(result.net_pnl)}`}          color={result.net_pnl >= 0 ? "green" : "red"} glow />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-                <StatCard label="Total Trades" value={String(result.total_trades)} sub={`${result.wins}W · ${result.losses}L`} />
+                <StatCard label="Total Trades" value={String(result.total_trades)} sub={`${result.wins}W · ${result.losses}L · ${longs}↑ ${shorts}↓`} />
                 <StatCard label="Avg Win"      value={`$${fmt(result.avg_win)}`}  color="green" />
                 <StatCard label="Avg Loss"     value={`$${fmt(result.avg_loss)}`} color="red" />
                 <StatCard label="Worst Streak" value={String(result.largest_losing_streak)} color="yellow" />
