@@ -1,0 +1,151 @@
+"use client";
+import { useEffect, useRef } from "react";
+import {
+  createChart,
+  ColorType,
+  CrosshairMode,
+  CandlestickSeries,
+  createSeriesMarkers,
+  type IChartApi,
+  type ISeriesApi,
+  type CandlestickData,
+  type SeriesMarker,
+  type Time,
+} from "lightweight-charts";
+
+export interface Candle {
+  t: number; // unix ms
+  o: string | number;
+  h: string | number;
+  l: string | number;
+  c: string | number;
+  v: string | number;
+}
+
+export interface SignalMarker {
+  time: number;       // unix ms
+  direction: "long" | "short";
+  type: string;       // e.g. "Entry", "Exit TP", "Exit SL"
+  price: number;
+}
+
+interface Props {
+  candles: Candle[];
+  signals?: SignalMarker[];
+  height?: number;
+}
+
+export default function CandleChart({ candles, signals = [], height = 500 }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef     = useRef<IChartApi | null>(null);
+  const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current || !candles.length) return;
+
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#0d1321" },
+        textColor: "#64748b",
+        fontFamily: "Inter, system-ui, sans-serif",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: "#1e2a3a" },
+        horzLines: { color: "#1e2a3a" },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: "#3b82f6", labelBackgroundColor: "#3b82f6" },
+        horzLine: { color: "#3b82f6", labelBackgroundColor: "#3b82f6" },
+      },
+      rightPriceScale: {
+        borderColor: "#1e2a3a",
+        textColor: "#64748b",
+      },
+      timeScale: {
+        borderColor: "#1e2a3a",
+        timeVisible: true,
+        secondsVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true,
+      },
+      width:  containerRef.current.clientWidth,
+      height,
+    });
+
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor:          "#10b981",
+      downColor:        "#ef4444",
+      borderUpColor:    "#10b981",
+      borderDownColor:  "#ef4444",
+      wickUpColor:      "#10b981",
+      wickDownColor:    "#ef4444",
+    });
+
+    // Convert Hyperliquid candles → lightweight-charts format
+    const data: CandlestickData[] = candles
+      .map(c => ({
+        time: Math.floor(c.t / 1000) as Time,
+        open:  Number(c.o),
+        high:  Number(c.h),
+        low:   Number(c.l),
+        close: Number(c.c),
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number));
+
+    series.setData(data);
+
+    // Add signal markers
+    if (signals.length > 0) {
+      const markers: SeriesMarker<Time>[] = signals
+        .map(s => {
+          const isLong  = s.direction === "long";
+          const isEntry = s.type.toLowerCase().includes("entry");
+          const isTP    = s.type.toLowerCase().includes("tp");
+          const isSL    = s.type.toLowerCase().includes("sl");
+
+          return {
+            time:     Math.floor(s.time / 1000) as Time,
+            position: isLong ? "belowBar" : "aboveBar",
+            color:    isEntry
+              ? (isLong ? "#10b981" : "#ef4444")
+              : isTP ? "#3b82f6" : "#f59e0b",
+            shape: isEntry
+              ? (isLong ? "arrowUp" : "arrowDown")
+              : "circle",
+            text: s.type,
+            size: isEntry ? 2 : 1,
+          } as SeriesMarker<Time>;
+        })
+        .sort((a, b) => (a.time as number) - (b.time as number));
+
+      createSeriesMarkers(series, markers);
+    }
+
+    chart.timeScale().fitContent();
+
+    // Resize observer
+    const ro = new ResizeObserver(() => {
+      if (containerRef.current) {
+        chart.applyOptions({ width: containerRef.current.clientWidth });
+      }
+    });
+    ro.observe(containerRef.current);
+
+    chartRef.current  = chart;
+    seriesRef.current = series;
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+    };
+  }, [candles, signals, height]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ width: "100%", height, borderRadius: 8, overflow: "hidden" }}
+    />
+  );
+}

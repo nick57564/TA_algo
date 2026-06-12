@@ -24,7 +24,7 @@ def _nearest_idx(df: pd.DataFrame, ts: pd.Timestamp) -> int:
     return int(mask.values.nonzero()[0][-1])
 
 
-def run(data: dict[str, pd.DataFrame]) -> list[Trade]:
+def run(data: dict[str, pd.DataFrame]) -> tuple[list[Trade], list[dict]]:
     """
     data: dict of {timeframe: OHLCV DataFrame} for W, D, 4H, 1H.
     Returns list of completed Trade objects.
@@ -40,7 +40,8 @@ def run(data: dict[str, pd.DataFrame]) -> list[Trade]:
     states_4h = compute_structure(df_4h)
     states_1h = compute_structure(df_1h)
 
-    trades: list[Trade] = []
+    trades:  list[Trade] = []
+    signals: list[dict]  = []
     balance = INITIAL_CAPITAL
     open_trade_obj: Trade | None = None
 
@@ -93,6 +94,16 @@ def run(data: dict[str, pd.DataFrame]) -> list[Trade]:
         if signal is None:
             continue
 
+        # Record signal for chart
+        signals.append({
+            "timestamp":     signal["timestamp"].isoformat(),
+            "direction":     signal["direction"],
+            "type":          "Entry",
+            "price":         signal["entry_price"],
+            "retest_level":  signal.get("retest_level"),
+            "timeframe":     "1H",
+        })
+
         # Open trade
         structural_level = state_1h.active_hl if direction == "bullish" else state_1h.active_lh
         open_trade_obj = open_trade(
@@ -111,4 +122,15 @@ def run(data: dict[str, pd.DataFrame]) -> list[Trade]:
         open_trade_obj.exit_reason = "end_of_data"
         trades.append(open_trade_obj)
 
-    return trades
+    # Add exit markers for all completed trades
+    for t in trades:
+        if t.exit_time and t.exit_reason != "end_of_data":
+            signals.append({
+                "timestamp": t.exit_time.isoformat(),
+                "direction": t.direction,
+                "type":      "Exit TP" if t.exit_reason == "tp" else "Exit SL",
+                "price":     t.exit_price,
+                "timeframe": "1H",
+            })
+
+    return trades, signals

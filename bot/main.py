@@ -49,8 +49,9 @@ def run_backtest(args):
         print(f"  {tf:4s}: {len(df)} candles  {df.index[0].date()} → {df.index[-1].date()}")
 
     print("\nRunning strategy…")
-    trades = run(data)
+    trades, signals = run(data)
     stats  = generate(trades, initial_capital=INITIAL_CAPITAL)
+    print(f"  Signals found: {len(signals)}")
 
     if not stats:
         return
@@ -64,6 +65,22 @@ def run_backtest(args):
             "symbol": args.symbol,
             "timeframe": "multi",
             **stats,
+            "signals": signals,
+            "trades": [
+                {
+                    "direction":   t.direction,
+                    "entry_price": t.entry_price,
+                    "exit_price":  t.exit_price,
+                    "entry_time":  t.entry_time.isoformat() if hasattr(t.entry_time, "isoformat") else str(t.entry_time),
+                    "exit_time":   t.exit_time.isoformat()  if hasattr(t.exit_time,  "isoformat") else str(t.exit_time),
+                    "exit_reason": t.exit_reason,
+                    "pnl":         round(t.pnl(), 2),
+                    "size":        round(t.size, 6),
+                    "sl_price":    t.sl_price,
+                    "tp_price":    t.tp_price,
+                }
+                for t in trades
+            ],
         }
         data_bytes = json.dumps(payload).encode()
         req = urllib.request.Request(
