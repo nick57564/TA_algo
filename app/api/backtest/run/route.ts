@@ -211,10 +211,8 @@ function analyseWin(t: Trade): string {
 }
 
 // ── Main backtest engine ──────────────────────────────────────────────────────
-function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[]; userLimit: number }) {
-  const { w, d, h4, h1, userLimit } = data;
-  // Only scan 1H candles inside the user's requested window (skip the 200-day SMA warmup period)
-  const scanFrom = Date.now() - userLimit * 86_400_000;
+function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] }) {
+  const { w, d, h4, h1 } = data;
 
   const statesW  = computeStructure(w);
   const statesD  = computeStructure(d);
@@ -239,7 +237,6 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[]; u
 
   for (let i = 2; i < h1.length; i++) {
     const candle  = h1[i];
-    if (candle.time < scanFrom) continue;   // skip warmup period
     const prevH1  = h1[i - 1];
     const state1h = statesH1[i];
 
@@ -408,7 +405,7 @@ export async function POST(req: NextRequest) {
       fetchCandles(symbol, "1h",  warmup * 24,           testnet),
     ]);
 
-    const result = runBacktest({ w, d, h4, h1, userLimit: limit });
+    const result = runBacktest({ w, d, h4, h1 });
     return NextResponse.json(result);
   } catch (e) {
     console.error(e);
