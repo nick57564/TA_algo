@@ -1,412 +1,243 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic";
+export const dynamic  = "force-dynamic";
 export const maxDuration = 60;
 
 const HL_MAINNET = "https://api.hyperliquid.xyz/info";
 const HL_TESTNET = "https://api.hyperliquid-testnet.xyz/info";
 
-const INTERVAL_MS: Record<string, number> = {
-  "1h":  3_600_000,
-  "4h":  14_400_000,
-  "1d":  86_400_000,
-  "1w":  604_800_000,
-};
+interface RawCandle { t: number; o: string; h: string; l: string; c: string; v: string; }
+interface Bar { time: number; open: number; high: number; low: number; close: number; }
 
-interface Candle { t: number; o: string; h: string; l: string; c: string; v: string; }
-interface OHLCV   { time: number; open: number; high: number; low: number; close: number; volume: number; }
-
-async function fetchCandles(symbol: string, interval: string, limit: number, testnet: boolean): Promise<OHLCV[]> {
-  const url   = testnet ? HL_TESTNET : HL_MAINNET;
-  const ms    = INTERVAL_MS[interval] ?? INTERVAL_MS["1d"];
-  const endMs = Date.now();
-  const startMs = endMs - limit * ms;
-  const resp  = await fetch(url, {
-    method: "POST",
+async function fetchBars(symbol: string, interval: string, days: number, testnet: boolean): Promise<Bar[]> {
+  const url     = testnet ? HL_TESTNET : HL_MAINNET;
+  const msPerBar: Record<string, number> = { "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000, "1w": 604_800_000 };
+  const ms      = msPerBar[interval] ?? msPerBar["1d"];
+  const endMs   = Date.now();
+  const startMs = endMs - days * 86_400_000;          // always in wall-clock days
+  const resp    = await fetch(url, {
+    method : "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval, startTime: startMs, endTime: endMs } }),
+    body   : JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval, startTime: startMs, endTime: endMs } }),
   });
-  const data: Candle[] = await resp.json();
-  return data
-    .map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c, volume: +c.v }))
+  const raw: RawCandle[] = await resp.json();
+  return raw
+    .map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c }))
     .sort((a, b) => a.time - b.time);
 }
 
-// ── 200-period SMA ────────────────────────────────────────────────────────────
-function sma200(values: number[]): (number | null)[] {
-  const out: (number | null)[] = [];
+// ── 200-period SMA (expanding window so it starts from bar 1) ─────────────────
+function sma(bars: Bar[], period: number): number[] {
+  const out: number[] = [];
   let sum = 0;
-  for (let i = 0; i < values.length; i++) {
-    sum += values[i];
-    if (i >= 200) sum -= values[i - 200];
-    out.push(i >= 199 ? sum / 200 : null);
+  for (let i = 0; i < bars.length; i++) {
+    sum += bars[i].close;
+    if (i >= period) sum -= bars[i - period].close;
+    out.push(sum / Math.min(i + 1, period));
   }
   return out;
 }
 
-// ── Swing detection (color-change method) ────────────────────────────────────
-interface Swing { type: "high" | "low"; price: number; time: number; }
+// ── Bullish engulfing: green bar fully wraps previous red bar ─────────────────
+function isBullEngulf(prev: Bar, cur: Bar): boolean {
+  return prev.close < prev.open           // prev is red
+    && cur.close  > cur.open             // cur is green
+    && cur.open   < prev.close           // opens below prev close
+    && cur.close  > prev.open;           // closes above prev open
+}
 
-function detectSwings(candles: OHLCV[]): Swing[] {
-  const swings: Swing[] = [];
-  for (let i = 1; i < candles.length; i++) {
-    const prev = candles[i - 1];
-    const cur  = candles[i];
-    const prevBull = prev.close > prev.open;
-    const curBull  = cur.close  > cur.open;
-    if (prevBull && !curBull)  swings.push({ type: "high", price: prev.high, time: prev.time });
-    if (!prevBull && curBull)  swings.push({ type: "low",  price: prev.low,  time: prev.time });
+// ── Bearish engulfing: red bar fully wraps previous green bar ─────────────────
+function isBearEngulf(prev: Bar, cur: Bar): boolean {
+  return prev.close > prev.open           // prev is green
+    && cur.close  < cur.open             // cur is red
+    && cur.open   > prev.close           // opens above prev close
+    && cur.close  < prev.open;           // closes below prev open
+}
+
+// ── Post-trade analysis ───────────────────────────────────────────────────────
+function analyse(pnl: number, holdDays: number, exitReason: string, streakBefore: number): string {
+  if (exitReason === "eod") return "Trade open at end of data — no exit yet.";
+
+  if (pnl > 0) {
+    if (holdDays <= 1) return `Fast win (${holdDays}d) — strong momentum right after the engulfing candle.`;
+    return `Clean move to target in ${holdDays} day${holdDays > 1 ? "s" : ""} — price followed through after the pattern.`;
   }
-  return swings;
+
+  if (holdDays <= 1) return `Immediate reversal (${holdDays}d) — engulfing candle was a false signal; price snapped back within a day. The surrounding candles were likely too small (low volatility chop).`;
+  if (streakBefore >= 2) return `Part of a ${streakBefore + 1}-loss streak — market was ranging/choppy, engulfing patterns were unreliable. The 200 MA direction was right but momentum was weak.`;
+  return `Stop hit after ${holdDays} day${holdDays > 1 ? "s" : ""} — the move started but reversed before reaching the 3% target. Consider a wider TP or trailing stop in trending markets.`;
 }
 
-// ── Structure state machine ───────────────────────────────────────────────────
-type Trend = "bullish" | "bearish" | "neutral";
-interface StructureState { trend: Trend; activeHL: number; activeLH: number; }
-
-function computeStructure(candles: OHLCV[]): StructureState[] {
-  const swings = detectSwings(candles);
-  const states: StructureState[] = [];
-
-  let trend: Trend     = "neutral";
-  let activeHL         = 0;
-  let activeLH         = Infinity;
-  let lastSwingHigh    = 0;
-  let lastSwingLow     = Infinity;
-  let swingIdx         = 0;
-
-  for (let i = 0; i < candles.length; i++) {
-    const c = candles[i];
-
-    // absorb swings up to this candle — track MOST RECENT, not all-time extreme
-    while (swingIdx < swings.length && swings[swingIdx].time <= c.time) {
-      const s = swings[swingIdx++];
-      if (s.type === "high") lastSwingHigh = s.price;
-      else                   lastSwingLow  = s.price;
-    }
-
-    // state transitions
-    if (trend !== "bullish" && lastSwingHigh > 0 && c.close > lastSwingHigh) {
-      trend    = "bullish";
-      activeHL = lastSwingLow < Infinity ? lastSwingLow : 0;
-    }
-    if (trend === "bullish" && activeHL > 0 && c.close < activeHL) {
-      trend    = "bearish";
-      activeLH = lastSwingHigh > 0 ? lastSwingHigh : Infinity;
-    }
-    if (trend !== "bearish" && lastSwingLow < Infinity && c.close < lastSwingLow) {
-      trend    = "bearish";
-      activeLH = lastSwingHigh > 0 ? lastSwingHigh : Infinity;
-    }
-    if (trend === "bearish" && activeLH < Infinity && c.close > activeLH) {
-      trend    = "bullish";
-      activeHL = lastSwingLow < Infinity ? lastSwingLow : 0;
-    }
-
-    states.push({ trend, activeHL, activeLH });
-  }
-  return states;
-}
-
-// ── MTF alignment check ───────────────────────────────────────────────────────
-function isAligned(
-  trendD: Trend,
-  trendW: Trend,
-  trend4h: Trend,
-  emaBias: "long" | "short",
-): { ok: boolean; combo: string } {
-  const dir   = emaBias === "long" ? "bullish" : "bearish";
-  const wdOk  = trendW === dir && trendD === dir;
-  const d4hOk = trendD === dir && trend4h === dir;
-  const dOnly = trendD === dir; // daily alone is enough if 4H is neutral
-  if (wdOk && d4hOk) return { ok: true, combo: "Weekly + Daily + 4H" };
-  if (wdOk)          return { ok: true, combo: "Weekly + Daily" };
-  if (d4hOk)         return { ok: true, combo: "Daily + 4H" };
-  if (dOnly)         return { ok: true, combo: "Daily" };
-  return { ok: false, combo: "" };
-}
-
-// ── Entry detection (engulfing on retest) ─────────────────────────────────────
-function isEngulfing(prev: OHLCV, cur: OHLCV, dir: "bullish" | "bearish"): boolean {
-  if (dir === "bullish") {
-    const prevRed  = prev.close < prev.open;
-    const curGreen = cur.close  > cur.open;
-    return prevRed && curGreen && cur.close > prev.open && cur.open < prev.close;
-  }
-  const prevGreen = prev.close > prev.open;
-  const curRed    = cur.close  < cur.open;
-  return prevGreen && curRed && cur.close < prev.open && cur.open > prev.close;
-}
-
-const RETEST_TOL = 0.005; // 0.5%
-
-function nearLevel(candle: OHLCV, level: number, dir: "bullish" | "bearish"): boolean {
-  if (!level || level === 0 || level === Infinity) return false;
-  // bullish retest: candle wick touches the level from above (low near HL)
-  // bearish retest: candle wick touches the level from below (high near LH)
-  const probe = dir === "bullish" ? candle.low : candle.high;
-  return Math.abs(probe - level) / level < RETEST_TOL;
-}
-
-// ── Risk management ───────────────────────────────────────────────────────────
-const RISK        = 0.01;
-const SL_PCT      = 0.01;
-const TP_PCT      = 0.03;
-const SL_BUFFER   = 0.001;
-const INITIAL_CAP = 10_000;
-
+// ── Main engine ───────────────────────────────────────────────────────────────
 interface Trade {
-  direction: "long" | "short";
-  entryPrice: number; exitPrice: number;
-  entryTime: number;  exitTime: number;
-  slPrice: number;    tpPrice: number;
-  pnl: number;        size: number;
-  exitReason: "tp" | "sl" | "eod";
+  direction:   "long" | "short";
+  entryTime:   number; exitTime:  number;
+  entryPrice:  number; exitPrice: number;
+  slPrice:     number; tpPrice:   number;
+  pnl:         number; size:      number;
+  exitReason:  "tp" | "sl" | "eod";
   entryReason: string;
-  analysis?: string;
+  analysis:    string;
 }
 
-interface Signal {
-  timestamp: string;
-  direction: "long" | "short";
-  type: string;
-  price: number;
-  timeframe: string;
-}
+function runEngine(bars: Bar[], sma200: number[]): { trades: Trade[]; signals: object[] } {
+  const RISK     = 0.01;   // 1% account risk per trade
+  const SL_PCT   = 0.015;  // 1.5% stop loss
+  const TP_PCT   = 0.045;  // 4.5% take profit  (3:1 R:R)
+  const CAP      = 10_000;
 
-// ── Trade failure analysis ────────────────────────────────────────────────────
-function analyseFailure(t: Trade, allTrades: Trade[], idx: number): string {
-  const holdMs   = t.exitTime - t.entryTime;
-  const holdH    = holdMs / 3_600_000;
-  const pctMove  = Math.abs(t.exitPrice - t.entryPrice) / t.entryPrice * 100;
+  const trades:  Trade[]   = [];
+  const signals: object[]  = [];
+  let balance = CAP;
+  let open: Trade | null   = null;
+  let lossesBefore = 0;
 
-  // Consecutive losses before this trade
-  let streak = 0;
-  for (let j = idx - 1; j >= 0 && allTrades[j].pnl <= 0; j--) streak++;
+  for (let i = 1; i < bars.length; i++) {
+    const prev = bars[i - 1];
+    const cur  = bars[i];
+    const ma   = sma200[i];
 
-  if (holdH <= 4)
-    return `Immediate reversal (held ${holdH.toFixed(0)}h) — false breakout, price never confirmed the move. Consider waiting for a second candle close before entering.`;
-
-  if (holdH <= 24)
-    return `Quick stop-out (held ${holdH.toFixed(0)}h) — entry timing was late in the move. The structural level may have already been absorbed by the market.`;
-
-  if (streak >= 2)
-    return `Part of a ${streak + 1}-trade losing streak — market was ranging/choppy. The 200 SMA filter kept direction right but structure levels were unreliable in this phase.`;
-
-  if (pctMove < 0.5)
-    return `Stop barely moved (${pctMove.toFixed(2)}%) before hitting SL — very tight range, likely noise around the level. A slightly wider SL buffer could have survived this.`;
-
-  return `Structural level failed to hold — the retest level at $${t.slPrice?.toFixed(0)} was broken with conviction, signalling the higher-timeframe trend overpowered the setup.`;
-}
-
-function analyseWin(t: Trade): string {
-  const holdH   = (t.exitTime - t.entryTime) / 3_600_000;
-  const pctMove = Math.abs(t.exitPrice - t.entryPrice) / t.entryPrice * 100;
-
-  if (holdH <= 8)
-    return `Fast TP (${holdH.toFixed(0)}h) — strong momentum, price moved cleanly to target with no pullback.`;
-  if (pctMove >= 2.8)
-    return `Clean trend continuation — price respected the structural level and followed through ${pctMove.toFixed(1)}% to target.`;
-  return `Level held well — price bounced from the retest zone and reached TP in ${holdH.toFixed(0)}h.`;
-}
-
-// ── Main backtest engine ──────────────────────────────────────────────────────
-function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] }) {
-  const { w, d, h4, h1 } = data;
-
-  const statesW  = computeStructure(w);
-  const statesD  = computeStructure(d);
-  const statesH4 = computeStructure(h4);
-  const statesH1 = computeStructure(h1);
-  const smaD     = sma200(d.map(c => c.close));
-
-  const trades:  Trade[]  = [];
-  const signals: Signal[] = [];
-
-  let balance = INITIAL_CAP;
-  let open: Trade | null  = null;
-
-  function nearestIdx(arr: OHLCV[], ts: number): number {
-    let lo = 0, hi = arr.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (arr[mid].time <= ts) lo = mid; else hi = mid - 1;
-    }
-    return lo;
-  }
-
-  for (let i = 2; i < h1.length; i++) {
-    const candle  = h1[i];
-    const prevH1  = h1[i - 1];
-    const state1h = statesH1[i];
-
-    // ── Manage open trade ──
+    // ── manage open trade (check SL/TP against this bar's high/low) ──
     if (open) {
+      let closed = false;
       if (open.direction === "long") {
-        if (candle.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitTime = candle.time; open.exitReason = "sl"; }
-        if (candle.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitTime = candle.time; open.exitReason = "tp"; }
+        if (cur.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = "sl"; closed = true; }
+        if (cur.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       } else {
-        if (candle.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitTime = candle.time; open.exitReason = "sl"; }
-        if (candle.low  <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitTime = candle.time; open.exitReason = "tp"; }
+        if (cur.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = "sl"; closed = true; }
+        if (cur.low  <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       }
-      if (open.exitReason !== "eod") {
-        const mult = open.direction === "long" ? 1 : -1;
-        open.pnl   = (open.exitPrice - open.entryPrice) * mult * open.size;
-        balance   += open.pnl;
-        signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : "Exit SL", price: open.exitPrice, timeframe: "1H" });
+      if (closed) {
+        open.exitTime = cur.time;
+        const mult    = open.direction === "long" ? 1 : -1;
+        open.pnl      = (open.exitPrice - open.entryPrice) * mult * open.size;
+        balance      += open.pnl;
+        const streak  = lossesBefore;
+        const holdD   = Math.round((open.exitTime - open.entryTime) / 86_400_000);
+        open.analysis = analyse(open.pnl, holdD, open.exitReason, streak);
+        if (open.pnl <= 0) lossesBefore++; else lossesBefore = 0;
+        signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : "Exit SL", price: open.exitPrice });
         trades.push(open);
         open = null;
       }
-      continue;
+      continue;   // one trade at a time
     }
 
-    // ── 200 SMA bias: above = long only, below = short only ──
-    const dIdx   = nearestIdx(d, candle.time);
-    const smaVal = smaD[dIdx];
-    if (smaVal === null) continue;   // need 200 daily candles of warmup
-    const emaBias: "long" | "short" = d[dIdx].close > smaVal ? "long" : "short";
+    // ── check for entry ──
+    const longBias  = cur.close > ma;   // above 200 SMA → look for longs
+    const shortBias = cur.close < ma;   // below 200 SMA → look for shorts
 
-    // ── MTF alignment ──
-    const wIdx  = nearestIdx(w,  candle.time);
-    const h4Idx = nearestIdx(h4, candle.time);
-    const trendW  = statesW[wIdx]?.trend  ?? "neutral";
-    const trendD  = statesD[dIdx]?.trend  ?? "neutral";
-    const trendH4 = statesH4[h4Idx]?.trend ?? "neutral";
+    let dir: "long" | "short" | null = null;
+    if (longBias  && isBullEngulf(prev, cur)) dir = "long";
+    if (shortBias && isBearEngulf(prev, cur)) dir = "short";
+    if (!dir) continue;
 
-    const dir = emaBias === "long" ? "bullish" : "bearish";
-
-    // ── Entry: engulfing candle (200 SMA sets the side, that's the only filter) ──
-    if (!isEngulfing(prevH1, candle, dir)) continue;
-
-    const side       = dir === "bullish" ? "BUY" : "SELL";
-    const candleType = dir === "bullish" ? "green candle swallowed the previous red one" : "red candle swallowed the previous green one";
-    const maSide     = dir === "bullish" ? "above" : "below";
-    const entryReason = `${side} signal: A ${candleType}. Price is ${maSide} the 200-day moving average.`;
-
-    // ── Size & levels ──
-    const slPrice = dir === "bullish"
-      ? candle.close * (1 - SL_PCT - SL_BUFFER)
-      : candle.close * (1 + SL_PCT + SL_BUFFER);
-    const tpPrice = dir === "bullish"
-      ? candle.close * (1 + TP_PCT)
-      : candle.close * (1 - TP_PCT);
-    const riskAmt = balance * RISK;
-    const slDist  = Math.abs(candle.close - slPrice);
-    const size    = slDist > 0 ? riskAmt / slDist : 0;
+    const slPrice = dir === "long"
+      ? cur.close * (1 - SL_PCT)
+      : cur.close * (1 + SL_PCT);
+    const tpPrice = dir === "long"
+      ? cur.close * (1 + TP_PCT)
+      : cur.close * (1 - TP_PCT);
+    const slDist  = Math.abs(cur.close - slPrice);
+    const size    = slDist > 0 ? (balance * RISK) / slDist : 0;
     if (size <= 0) continue;
 
-    const trade: Trade = {
-      direction: dir === "bullish" ? "long" : "short",
-      entryPrice: candle.close, exitPrice: 0,
-      entryTime: candle.time, exitTime: 0,
-      slPrice, tpPrice, size,
-      pnl: 0, exitReason: "eod",
-      entryReason,
-    };
-    open = trade;
+    const maSide     = dir === "long" ? "above" : "below";
+    const candleDesc = dir === "long"
+      ? "green candle swallowed the previous red one"
+      : "red candle swallowed the previous green one";
+    const entryReason = `${dir === "long" ? "BUY" : "SELL"}: A ${candleDesc}. Price is ${maSide} the 200-day moving average (${ma.toFixed(0)}).`;
 
-    signals.push({ timestamp: new Date(candle.time).toISOString(), direction: trade.direction, type: "Entry", price: candle.close, timeframe: "1H" });
+    open = { direction: dir, entryTime: cur.time, exitTime: 0, entryPrice: cur.close, exitPrice: 0, slPrice, tpPrice, size, pnl: 0, exitReason: "eod", entryReason, analysis: "" };
+    signals.push({ timestamp: new Date(cur.time).toISOString(), direction: dir, type: "Entry", price: cur.close });
   }
 
-  // Close any open at last candle
+  // close any still-open trade at last bar
   if (open) {
-    open.exitPrice  = h1[h1.length - 1].close;
-    open.exitTime   = h1[h1.length - 1].time;
+    open.exitTime   = bars[bars.length - 1].time;
+    open.exitPrice  = bars[bars.length - 1].close;
     open.exitReason = "eod";
-    const mult = open.direction === "long" ? 1 : -1;
-    open.pnl   = (open.exitPrice - open.entryPrice) * mult * open.size;
-    balance   += open.pnl;
+    const mult      = open.direction === "long" ? 1 : -1;
+    open.pnl        = (open.exitPrice - open.entryPrice) * mult * open.size;
+    open.analysis   = analyse(open.pnl, Math.round((open.exitTime - open.entryTime) / 86_400_000), "eod", 0);
+    balance        += open.pnl;
     trades.push(open);
   }
 
-  // ── Post-trade analysis ──
-  for (let i = 0; i < trades.length; i++) {
-    const t = trades[i];
-    if (t.exitReason === "eod") {
-      t.analysis = "Trade still open at end of data — no exit signal triggered yet.";
-    } else if (t.pnl > 0) {
-      t.analysis = analyseWin(t);
-    } else {
-      t.analysis = analyseFailure(t, trades, i);
-    }
-  }
+  return { trades, signals };
+}
 
-  // ── Stats ──
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function buildStats(trades: Trade[]) {
   const winners = trades.filter(t => t.pnl > 0);
   const losers  = trades.filter(t => t.pnl <= 0);
   const netPnl  = trades.reduce((s, t) => s + t.pnl, 0);
   const grossW  = winners.reduce((s, t) => s + t.pnl, 0);
   const grossL  = Math.abs(losers.reduce((s, t) => s + t.pnl, 0));
 
-  // Max drawdown
-  let peak = INITIAL_CAP, maxDD = 0, eq = INITIAL_CAP;
+  let peak = 10_000, maxDD = 0, eq = 10_000;
   for (const t of trades) {
-    eq   += t.pnl;
-    peak  = Math.max(peak, eq);
+    eq += t.pnl; peak = Math.max(peak, eq);
     maxDD = Math.max(maxDD, (peak - eq) / peak * 100);
   }
 
-  // Worst losing streak
   let streak = 0, maxStreak = 0;
   for (const t of trades) {
     if (t.pnl <= 0) { streak++; maxStreak = Math.max(maxStreak, streak); }
-    else            { streak = 0; }
+    else streak = 0;
   }
 
-  // Monthly returns
   const monthly: Record<string, number> = {};
   for (const t of trades) {
-    const k = new Date(t.exitTime).toISOString().slice(0, 7);
+    const k = new Date(t.exitTime || t.entryTime).toISOString().slice(0, 7);
     monthly[k] = (monthly[k] ?? 0) + t.pnl;
   }
 
   return {
-    total_trades:          trades.length,
-    wins:                  winners.length,
-    losses:                losers.length,
-    winrate_pct:           trades.length ? winners.length / trades.length * 100 : 0,
-    net_pnl:               netPnl,
-    profit_factor:         grossL > 0 ? grossW / grossL : grossW > 0 ? 99 : 0,
-    avg_win:               winners.length ? grossW / winners.length : 0,
-    avg_loss:              losers.length  ? grossL / losers.length  : 0,
-    max_drawdown_pct:      maxDD,
+    total_trades: trades.length,
+    wins:   winners.length,
+    losses: losers.length,
+    winrate_pct:   trades.length ? winners.length / trades.length * 100 : 0,
+    net_pnl:       +netPnl.toFixed(2),
+    profit_factor: grossL > 0 ? +(grossW / grossL).toFixed(2) : grossW > 0 ? 99 : 0,
+    avg_win:       winners.length ? +(grossW / winners.length).toFixed(2) : 0,
+    avg_loss:      losers.length  ? +(grossL / losers.length).toFixed(2)  : 0,
+    max_drawdown_pct: +maxDD.toFixed(2),
     largest_losing_streak: maxStreak,
-    final_balance:         balance,
-    monthly_returns:       monthly,
-    signals,
-    trades: trades.map(t => ({
-      direction:   t.direction,
-      entry_price: t.entryPrice,
-      exit_price:  t.exitPrice,
-      entry_time:  new Date(t.entryTime).toISOString(),
-      exit_time:   new Date(t.exitTime).toISOString(),
-      exit_reason:  t.exitReason,
-      entry_reason: t.entryReason,
-      analysis:     t.analysis,
-      pnl:          +t.pnl.toFixed(2),
-      size:        +t.size.toFixed(6),
-      sl_price:    t.slPrice,
-      tp_price:    t.tpPrice,
-    })),
+    monthly_returns: monthly,
   };
 }
 
-// ── Route handler ─────────────────────────────────────────────────────────────
+// ── Route ─────────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const { symbol = "BTC", limit = 500, testnet = false } = await req.json();
+    const { symbol = "BTC", limit = 365, testnet = false } = await req.json();
 
-    // Fetch limit+200 extra days so the 200 SMA has warmup across the FULL selected period
-    const warmup = limit + 200;
-    const [w, d, h4, h1] = await Promise.all([
-      fetchCandles(symbol, "1w",  Math.min(warmup, 400), testnet),
-      fetchCandles(symbol, "1d",  warmup,                testnet),
-      fetchCandles(symbol, "4h",  warmup * 4,            testnet),
-      fetchCandles(symbol, "1h",  warmup * 24,           testnet),
-    ]);
+    // fetch limit+200 days so 200 SMA has warmup from day 1
+    const bars    = await fetchBars(symbol, "1d", limit + 200, testnet);
+    const sma200  = sma(bars, 200);
 
-    const result = runBacktest({ w, d, h4, h1 });
-    return NextResponse.json(result);
+    const { trades, signals } = runEngine(bars, sma200);
+    const stats               = buildStats(trades);
+
+    return NextResponse.json({
+      ...stats,
+      signals,
+      trades: trades.map(t => ({
+        direction:    t.direction,
+        entry_price:  +t.entryPrice.toFixed(2),
+        exit_price:   +t.exitPrice.toFixed(2),
+        entry_time:   new Date(t.entryTime).toISOString(),
+        exit_time:    new Date(t.exitTime || t.entryTime).toISOString(),
+        exit_reason:  t.exitReason,
+        entry_reason: t.entryReason,
+        analysis:     t.analysis,
+        pnl:          +t.pnl.toFixed(2),
+        size:         +t.size.toFixed(6),
+        sl_price:     +t.slPrice.toFixed(2),
+        tp_price:     +t.tpPrice.toFixed(2),
+      })),
+    });
   } catch (e) {
     console.error(e);
     return NextResponse.json({ error: String(e) }, { status: 500 });
