@@ -78,29 +78,29 @@ function computeStructure(candles: OHLCV[]): StructureState[] {
   for (let i = 0; i < candles.length; i++) {
     const c = candles[i];
 
-    // absorb swings up to this candle
+    // absorb swings up to this candle — track MOST RECENT, not all-time extreme
     while (swingIdx < swings.length && swings[swingIdx].time <= c.time) {
       const s = swings[swingIdx++];
-      if (s.type === "high") lastSwingHigh = Math.max(lastSwingHigh, s.price);
-      else                   lastSwingLow  = Math.min(lastSwingLow, s.price);
+      if (s.type === "high") lastSwingHigh = s.price;
+      else                   lastSwingLow  = s.price;
     }
 
     // state transitions
     if (trend !== "bullish" && lastSwingHigh > 0 && c.close > lastSwingHigh) {
       trend    = "bullish";
-      activeHL = lastSwingLow;
-    }
-    if (trend !== "bearish" && lastSwingLow < Infinity && c.close < lastSwingLow) {
-      trend    = "bearish";
-      activeLH = lastSwingHigh;
+      activeHL = lastSwingLow < Infinity ? lastSwingLow : 0;
     }
     if (trend === "bullish" && activeHL > 0 && c.close < activeHL) {
       trend    = "bearish";
-      activeLH = lastSwingHigh;
+      activeLH = lastSwingHigh > 0 ? lastSwingHigh : Infinity;
+    }
+    if (trend !== "bearish" && lastSwingLow < Infinity && c.close < lastSwingLow) {
+      trend    = "bearish";
+      activeLH = lastSwingHigh > 0 ? lastSwingHigh : Infinity;
     }
     if (trend === "bearish" && activeLH < Infinity && c.close > activeLH) {
       trend    = "bullish";
-      activeHL = lastSwingLow;
+      activeHL = lastSwingLow < Infinity ? lastSwingLow : 0;
     }
 
     states.push({ trend, activeHL, activeLH });
@@ -124,20 +124,23 @@ function isAligned(
 // ── Entry detection (engulfing on retest) ─────────────────────────────────────
 function isEngulfing(prev: OHLCV, cur: OHLCV, dir: "bullish" | "bearish"): boolean {
   if (dir === "bullish") {
-    return cur.close > cur.open                // green
-      && cur.open  < prev.close                // opens below prev close
-      && cur.close > prev.open;               // closes above prev open
+    const prevRed  = prev.close < prev.open;
+    const curGreen = cur.close  > cur.open;
+    return prevRed && curGreen && cur.close > prev.open && cur.open < prev.close;
   }
-  return cur.close < cur.open                  // red
-    && cur.open  > prev.close
-    && cur.close < prev.open;
+  const prevGreen = prev.close > prev.open;
+  const curRed    = cur.close  < cur.open;
+  return prevGreen && curRed && cur.close < prev.open && cur.open > prev.close;
 }
 
-const RETEST_TOL = 0.002; // 0.2%
+const RETEST_TOL = 0.005; // 0.5%
 
-function nearLevel(price: number, level: number): boolean {
+function nearLevel(candle: OHLCV, level: number, dir: "bullish" | "bearish"): boolean {
   if (!level || level === 0 || level === Infinity) return false;
-  return Math.abs(price - level) / level < RETEST_TOL;
+  // bullish retest: candle wick touches the level from above (low near HL)
+  // bearish retest: candle wick touches the level from below (high near LH)
+  const probe = dir === "bullish" ? candle.low : candle.high;
+  return Math.abs(probe - level) / level < RETEST_TOL;
 }
 
 // ── Risk management ───────────────────────────────────────────────────────────
@@ -235,7 +238,7 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
     if (!isEngulfing(prevH1, candle, dir)) continue;
 
     const level = dir === "bullish" ? state1h.activeHL : state1h.activeLH;
-    if (!nearLevel(candle.close, level)) continue;
+    if (!nearLevel(candle, level, dir)) continue;
 
     // ── Size & levels ──
     const slPrice = dir === "bullish"
