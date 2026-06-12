@@ -1,0 +1,351 @@
+import { NextRequest, NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
+const HL_MAINNET = "https://api.hyperliquid.xyz/info";
+const HL_TESTNET = "https://api.hyperliquid-testnet.xyz/info";
+
+const INTERVAL_MS: Record<string, number> = {
+  "1h":  3_600_000,
+  "4h":  14_400_000,
+  "1d":  86_400_000,
+  "1w":  604_800_000,
+};
+
+interface Candle { t: number; o: string; h: string; l: string; c: string; v: string; }
+interface OHLCV   { time: number; open: number; high: number; low: number; close: number; volume: number; }
+
+async function fetchCandles(symbol: string, interval: string, limit: number, testnet: boolean): Promise<OHLCV[]> {
+  const url   = testnet ? HL_TESTNET : HL_MAINNET;
+  const ms    = INTERVAL_MS[interval] ?? INTERVAL_MS["1d"];
+  const endMs = Date.now();
+  const startMs = endMs - limit * ms;
+  const resp  = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval, startTime: startMs, endTime: endMs } }),
+  });
+  const data: Candle[] = await resp.json();
+  return data
+    .map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c, volume: +c.v }))
+    .sort((a, b) => a.time - b.time);
+}
+
+// ── EMA ──────────────────────────────────────────────────────────────────────
+function ema(values: number[], period: number): number[] {
+  const k = 2 / (period + 1);
+  const out: number[] = [];
+  let prev = values[0];
+  for (const v of values) {
+    prev = v * k + prev * (1 - k);
+    out.push(prev);
+  }
+  return out;
+}
+
+// ── Swing detection (color-change method) ────────────────────────────────────
+interface Swing { type: "high" | "low"; price: number; time: number; }
+
+function detectSwings(candles: OHLCV[]): Swing[] {
+  const swings: Swing[] = [];
+  for (let i = 1; i < candles.length; i++) {
+    const prev = candles[i - 1];
+    const cur  = candles[i];
+    const prevBull = prev.close > prev.open;
+    const curBull  = cur.close  > cur.open;
+    if (prevBull && !curBull)  swings.push({ type: "high", price: prev.high, time: prev.time });
+    if (!prevBull && curBull)  swings.push({ type: "low",  price: prev.low,  time: prev.time });
+  }
+  return swings;
+}
+
+// ── Structure state machine ───────────────────────────────────────────────────
+type Trend = "bullish" | "bearish" | "neutral";
+interface StructureState { trend: Trend; activeHL: number; activeLH: number; }
+
+function computeStructure(candles: OHLCV[]): StructureState[] {
+  const swings = detectSwings(candles);
+  const states: StructureState[] = [];
+
+  let trend: Trend     = "neutral";
+  let activeHL         = 0;
+  let activeLH         = Infinity;
+  let lastSwingHigh    = 0;
+  let lastSwingLow     = Infinity;
+  let swingIdx         = 0;
+
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i];
+
+    // absorb swings up to this candle
+    while (swingIdx < swings.length && swings[swingIdx].time <= c.time) {
+      const s = swings[swingIdx++];
+      if (s.type === "high") lastSwingHigh = Math.max(lastSwingHigh, s.price);
+      else                   lastSwingLow  = Math.min(lastSwingLow, s.price);
+    }
+
+    // state transitions
+    if (trend !== "bullish" && lastSwingHigh > 0 && c.close > lastSwingHigh) {
+      trend    = "bullish";
+      activeHL = lastSwingLow;
+    }
+    if (trend !== "bearish" && lastSwingLow < Infinity && c.close < lastSwingLow) {
+      trend    = "bearish";
+      activeLH = lastSwingHigh;
+    }
+    if (trend === "bullish" && activeHL > 0 && c.close < activeHL) {
+      trend    = "bearish";
+      activeLH = lastSwingHigh;
+    }
+    if (trend === "bearish" && activeLH < Infinity && c.close > activeLH) {
+      trend    = "bullish";
+      activeHL = lastSwingLow;
+    }
+
+    states.push({ trend, activeHL, activeLH });
+  }
+  return states;
+}
+
+// ── MTF alignment check ───────────────────────────────────────────────────────
+function isAligned(
+  trendD: Trend,
+  trendW: Trend,
+  trend4h: Trend,
+  emaBias: "long" | "short",
+): boolean {
+  const dir = emaBias === "long" ? "bullish" : "bearish";
+  const wdOk  = trendW === dir && trendD === dir;
+  const d4hOk = trendD === dir && trend4h === dir;
+  return wdOk || d4hOk;
+}
+
+// ── Entry detection (engulfing on retest) ─────────────────────────────────────
+function isEngulfing(prev: OHLCV, cur: OHLCV, dir: "bullish" | "bearish"): boolean {
+  if (dir === "bullish") {
+    return cur.close > cur.open                // green
+      && cur.open  < prev.close                // opens below prev close
+      && cur.close > prev.open;               // closes above prev open
+  }
+  return cur.close < cur.open                  // red
+    && cur.open  > prev.close
+    && cur.close < prev.open;
+}
+
+const RETEST_TOL = 0.002; // 0.2%
+
+function nearLevel(price: number, level: number): boolean {
+  if (!level || level === 0 || level === Infinity) return false;
+  return Math.abs(price - level) / level < RETEST_TOL;
+}
+
+// ── Risk management ───────────────────────────────────────────────────────────
+const RISK        = 0.01;
+const SL_PCT      = 0.01;
+const TP_PCT      = 0.03;
+const SL_BUFFER   = 0.001;
+const INITIAL_CAP = 10_000;
+
+interface Trade {
+  direction: "long" | "short";
+  entryPrice: number; exitPrice: number;
+  entryTime: number;  exitTime: number;
+  slPrice: number;    tpPrice: number;
+  pnl: number;        size: number;
+  exitReason: "tp" | "sl" | "eod";
+}
+
+interface Signal {
+  timestamp: string;
+  direction: "long" | "short";
+  type: string;
+  price: number;
+  timeframe: string;
+}
+
+// ── Main backtest engine ──────────────────────────────────────────────────────
+function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] }) {
+  const { w, d, h4, h1 } = data;
+
+  const statesW  = computeStructure(w);
+  const statesD  = computeStructure(d);
+  const statesH4 = computeStructure(h4);
+  const statesH1 = computeStructure(h1);
+  const emaD     = ema(d.map(c => c.close), 50);
+
+  const trades:  Trade[]  = [];
+  const signals: Signal[] = [];
+
+  let balance = INITIAL_CAP;
+  let open: Trade | null  = null;
+
+  function nearestIdx(arr: OHLCV[], ts: number): number {
+    let lo = 0, hi = arr.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (arr[mid].time <= ts) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+
+  for (let i = 2; i < h1.length; i++) {
+    const candle  = h1[i];
+    const prevH1  = h1[i - 1];
+    const state1h = statesH1[i];
+
+    // ── Manage open trade ──
+    if (open) {
+      if (open.direction === "long") {
+        if (candle.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitTime = candle.time; open.exitReason = "sl"; }
+        if (candle.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitTime = candle.time; open.exitReason = "tp"; }
+      } else {
+        if (candle.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitTime = candle.time; open.exitReason = "sl"; }
+        if (candle.low  <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitTime = candle.time; open.exitReason = "tp"; }
+      }
+      if (open.exitReason !== "eod") {
+        const mult = open.direction === "long" ? 1 : -1;
+        open.pnl   = (open.exitPrice - open.entryPrice) * mult * open.size;
+        balance   += open.pnl;
+        signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : "Exit SL", price: open.exitPrice, timeframe: "1H" });
+        trades.push(open);
+        open = null;
+      }
+      continue;
+    }
+
+    // ── EMA bias ──
+    const dIdx  = nearestIdx(d, candle.time);
+    const emaVal = emaD[dIdx];
+    if (!emaVal) continue;
+    const emaBias: "long" | "short" = d[dIdx].close > emaVal ? "long" : "short";
+
+    // ── MTF alignment ──
+    const wIdx  = nearestIdx(w,  candle.time);
+    const h4Idx = nearestIdx(h4, candle.time);
+    const trendW  = statesW[wIdx]?.trend  ?? "neutral";
+    const trendD  = statesD[dIdx]?.trend  ?? "neutral";
+    const trendH4 = statesH4[h4Idx]?.trend ?? "neutral";
+
+    if (!isAligned(trendD, trendW, trendH4, emaBias)) continue;
+
+    const dir = emaBias === "long" ? "bullish" : "bearish";
+
+    // ── Entry: engulfing on retest ──
+    if (!isEngulfing(prevH1, candle, dir)) continue;
+
+    const level = dir === "bullish" ? state1h.activeHL : state1h.activeLH;
+    if (!nearLevel(candle.close, level)) continue;
+
+    // ── Size & levels ──
+    const slPrice = dir === "bullish"
+      ? candle.close * (1 - SL_PCT - SL_BUFFER)
+      : candle.close * (1 + SL_PCT + SL_BUFFER);
+    const tpPrice = dir === "bullish"
+      ? candle.close * (1 + TP_PCT)
+      : candle.close * (1 - TP_PCT);
+    const riskAmt = balance * RISK;
+    const slDist  = Math.abs(candle.close - slPrice);
+    const size    = slDist > 0 ? riskAmt / slDist : 0;
+    if (size <= 0) continue;
+
+    const trade: Trade = {
+      direction: dir === "bullish" ? "long" : "short",
+      entryPrice: candle.close, exitPrice: 0,
+      entryTime: candle.time, exitTime: 0,
+      slPrice, tpPrice, size,
+      pnl: 0, exitReason: "eod",
+    };
+    open = trade;
+
+    signals.push({ timestamp: new Date(candle.time).toISOString(), direction: trade.direction, type: "Entry", price: candle.close, timeframe: "1H" });
+  }
+
+  // Close any open at last candle
+  if (open) {
+    open.exitPrice  = h1[h1.length - 1].close;
+    open.exitTime   = h1[h1.length - 1].time;
+    open.exitReason = "eod";
+    const mult = open.direction === "long" ? 1 : -1;
+    open.pnl   = (open.exitPrice - open.entryPrice) * mult * open.size;
+    balance   += open.pnl;
+    trades.push(open);
+  }
+
+  // ── Stats ──
+  const winners = trades.filter(t => t.pnl > 0);
+  const losers  = trades.filter(t => t.pnl <= 0);
+  const netPnl  = trades.reduce((s, t) => s + t.pnl, 0);
+  const grossW  = winners.reduce((s, t) => s + t.pnl, 0);
+  const grossL  = Math.abs(losers.reduce((s, t) => s + t.pnl, 0));
+
+  // Max drawdown
+  let peak = INITIAL_CAP, maxDD = 0, eq = INITIAL_CAP;
+  for (const t of trades) {
+    eq   += t.pnl;
+    peak  = Math.max(peak, eq);
+    maxDD = Math.max(maxDD, (peak - eq) / peak * 100);
+  }
+
+  // Worst losing streak
+  let streak = 0, maxStreak = 0;
+  for (const t of trades) {
+    if (t.pnl <= 0) { streak++; maxStreak = Math.max(maxStreak, streak); }
+    else            { streak = 0; }
+  }
+
+  // Monthly returns
+  const monthly: Record<string, number> = {};
+  for (const t of trades) {
+    const k = new Date(t.exitTime).toISOString().slice(0, 7);
+    monthly[k] = (monthly[k] ?? 0) + t.pnl;
+  }
+
+  return {
+    total_trades:          trades.length,
+    wins:                  winners.length,
+    losses:                losers.length,
+    winrate_pct:           trades.length ? winners.length / trades.length * 100 : 0,
+    net_pnl:               netPnl,
+    profit_factor:         grossL > 0 ? grossW / grossL : grossW > 0 ? 99 : 0,
+    avg_win:               winners.length ? grossW / winners.length : 0,
+    avg_loss:              losers.length  ? grossL / losers.length  : 0,
+    max_drawdown_pct:      maxDD,
+    largest_losing_streak: maxStreak,
+    final_balance:         balance,
+    monthly_returns:       monthly,
+    signals,
+    trades: trades.map(t => ({
+      direction:   t.direction,
+      entry_price: t.entryPrice,
+      exit_price:  t.exitPrice,
+      entry_time:  new Date(t.entryTime).toISOString(),
+      exit_time:   new Date(t.exitTime).toISOString(),
+      exit_reason: t.exitReason,
+      pnl:         +t.pnl.toFixed(2),
+      size:        +t.size.toFixed(6),
+      sl_price:    t.slPrice,
+      tp_price:    t.tpPrice,
+    })),
+  };
+}
+
+// ── Route handler ─────────────────────────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  try {
+    const { symbol = "BTC", limit = 500, testnet = false } = await req.json();
+
+    const [w, d, h4, h1] = await Promise.all([
+      fetchCandles(symbol, "1w",  Math.min(limit, 200), testnet),
+      fetchCandles(symbol, "1d",  limit,                testnet),
+      fetchCandles(symbol, "4h",  limit * 4,            testnet),
+      fetchCandles(symbol, "1h",  limit * 24,           testnet),
+    ]);
+
+    const result = runBacktest({ w, d, h4, h1 });
+    return NextResponse.json(result);
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
+}

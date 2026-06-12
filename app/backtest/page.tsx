@@ -5,11 +5,10 @@ import StatCard from "@/components/StatCard";
 import type { BacktestResult } from "@/lib/types";
 import type { Candle, SignalMarker } from "@/components/CandleChart";
 
-// SSR-safe — lightweight-charts uses window
 const CandleChart = dynamic(() => import("@/components/CandleChart"), { ssr: false });
 
 const SYMBOLS  = ["BTC","ETH","SOL","ARB","AVAX","DOGE","APT"];
-const LIMITS   = [200, 365, 500, 1000];
+const LIMITS   = [200, 365, 500];
 const INTERVALS: { label: string; value: string }[] = [
   { label: "1H", value: "1h" },
   { label: "4H", value: "4h" },
@@ -17,14 +16,6 @@ const INTERVALS: { label: string; value: string }[] = [
 ];
 const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 
-const INDICATORS = [
-  { id: "ema50",     label: "50 EMA",           desc: "Trend filter — daily",    color: "#3b82f6" },
-  { id: "structure", label: "Market Structure",  desc: "HH/HL · LL/LH state",    color: "#8b5cf6" },
-  { id: "swing",     label: "Swing Detection",   desc: "Color-change method",     color: "#f59e0b" },
-  { id: "mtf",       label: "MTF Sync",          desc: "W+D or D+4H alignment",  color: "#06b6d4" },
-  { id: "engulfing", label: "Engulfing Candle",  desc: "1H entry confirmation",   color: "#10b981" },
-  { id: "retest",    label: "Retest Zone",       desc: "Structural level retest", color: "#3b82f6" },
-];
 
 export default function BacktestPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
@@ -32,15 +23,11 @@ export default function BacktestPage() {
   const [symbol,   setSymbol]   = useState("BTC");
   const [interval, setInterval] = useState("1d");
   const [limit,    setLimit]    = useState(365);
-  const [polling,  setPolling]  = useState(false);
   const [loading,  setLoading]  = useState(false);
-  const [copied,   setCopied]   = useState(false);
-  const [tab,      setTab]      = useState<"chart"|"stats"|"trades">("chart");
-  const [activeInd, setActiveInd] = useState(
-    new Set(["ema50","structure","swing","mtf","engulfing","retest"])
-  );
+  const [running,  setRunning]  = useState(false);
+  const [runErr,   setRunErr]   = useState<string | null>(null);
+  const [tab,      setTab]      = useState<"stats"|"trades">("stats");
 
-  // Load candles from Hyperliquid
   const loadCandles = useCallback(async (sym: string, iv: string, lim: number) => {
     setLoading(true);
     try {
@@ -51,68 +38,71 @@ export default function BacktestPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    loadCandles(symbol, interval, limit);
-    fetch("/api/backtest").then(r => r.json()).then(d => { if (d) setResult(d); }).catch(() => {});
-  }, []);
+  useEffect(() => { loadCandles(symbol, interval, limit); }, []);
+  useEffect(() => { loadCandles(symbol, interval, limit); }, [symbol, interval, limit]);
 
-  // Reload chart when symbol/interval/limit changes
-  useEffect(() => {
-    loadCandles(symbol, interval, limit);
-  }, [symbol, interval, limit, loadCandles]);
-
-  function toggleInd(id: string) {
-    setActiveInd(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  async function runBacktest() {
+    setRunning(true);
+    setRunErr(null);
+    try {
+      const r = await fetch("/api/backtest/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, limit }),
+      });
+      const d = await r.json();
+      if (d.error) { setRunErr(d.error); }
+      else { setResult(d); }
+    } catch (e) {
+      setRunErr(String(e));
+    }
+    setRunning(false);
   }
 
-  function buildCmd() {
-    return `cd bot && python main.py --mode backtest --symbol ${symbol} --limit ${limit}`;
-  }
-
-  function copy() {
-    navigator.clipboard.writeText(buildCmd());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  function startPolling() {
-    setPolling(true);
-    let n = 0;
-    const id = window.setInterval(async () => {
-      n++;
-      const r = await fetch("/api/backtest", { cache: "no-store" }).then(x => x.json()).catch(() => null);
-      if (r) { setResult(r); setPolling(false); window.clearInterval(id); }
-      if (n > 90) { setPolling(false); window.clearInterval(id); }
-    }, 2000);
-  }
-
-  // Convert backtest result signals → chart markers
-  const chartSignals: SignalMarker[] = result?.signals?.map(s => ({
+  const markers: SignalMarker[] = result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
     time:      new Date(s.timestamp).getTime(),
     direction: s.direction,
     type:      s.type,
     price:     s.price,
   })) ?? [];
-
-  // Also add entry/exit from trades if no dedicated signals
-  const tradeMarkers: SignalMarker[] = (!result?.signals?.length && result?.trades)
-    ? result.trades.flatMap(t => [
-        { time: new Date(t.entry_time).getTime(), direction: t.direction, type: "Entry", price: t.entry_price },
-        { time: new Date(t.exit_time).getTime(),  direction: t.direction, type: t.exit_reason === "tp" ? "Exit TP" : "Exit SL", price: t.exit_price },
-      ])
-    : [];
-
-  const markers = chartSignals.length ? chartSignals : tradeMarkers;
-  const months  = result ? Object.entries(result.monthly_returns ?? {}).sort() : [];
+  const months = result ? Object.entries(result.monthly_returns ?? {}).sort() : [];
 
   return (
     <div style={{ padding: 28, maxWidth: 1200 }}>
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 700 }}>Backtest</h1>
-        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 3 }}>
-          Signals plotted on the real price chart — see exactly where the bot fires
-        </p>
+
+      {/* ── Header + Run button ── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 20, fontWeight: 700 }}>Backtest</h1>
+          <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 3 }}>
+            Pick a symbol, hit Run — signals appear on the chart instantly
+          </p>
+        </div>
+        <button
+          onClick={runBacktest}
+          disabled={running}
+          style={{
+            padding: "11px 28px", borderRadius: 12, fontSize: 14, fontWeight: 700,
+            cursor: running ? "not-allowed" : "pointer",
+            background: running ? "var(--dim)" : "var(--blue)",
+            color: running ? "var(--muted)" : "#fff",
+            border: "none", display: "flex", alignItems: "center", gap: 8,
+            boxShadow: running ? "none" : "0 0 20px rgba(59,130,246,.35)",
+            transition: "all .15s",
+          }}
+        >
+          {running
+            ? <><span style={{ width: 14, height: 14, border: "2px solid var(--muted)", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} /> Running…</>
+            : "▶ Run Backtest"
+          }
+        </button>
       </div>
+
+      {runErr && (
+        <div style={{ background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", borderRadius: 10, padding: "10px 16px", marginBottom: 14, fontSize: 12, color: "#f87171" }}>
+          Error: {runErr}
+        </div>
+      )}
 
       {/* ── Controls bar ── */}
       <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, padding: 18, marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-end" }}>
@@ -120,7 +110,7 @@ export default function BacktestPage() {
         {/* Symbol */}
         <div>
           <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", display: "block", marginBottom: 7 }}>Symbol</label>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {SYMBOLS.map(s => (
               <button key={s} onClick={() => setSymbol(s)} style={{
                 padding: "6px 13px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
@@ -132,9 +122,9 @@ export default function BacktestPage() {
           </div>
         </div>
 
-        {/* Interval */}
+        {/* Chart interval */}
         <div>
-          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", display: "block", marginBottom: 7 }}>Chart interval</label>
+          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", display: "block", marginBottom: 7 }}>Chart view</label>
           <div style={{ display: "flex", gap: 6 }}>
             {INTERVALS.map(iv => (
               <button key={iv.value} onClick={() => setInterval(iv.value)} style={{
@@ -147,9 +137,9 @@ export default function BacktestPage() {
           </div>
         </div>
 
-        {/* Candle count */}
+        {/* Lookback */}
         <div>
-          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", display: "block", marginBottom: 7 }}>Candles</label>
+          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", display: "block", marginBottom: 7 }}>Lookback (days)</label>
           <div style={{ display: "flex", gap: 6 }}>
             {LIMITS.map(l => (
               <button key={l} onClick={() => setLimit(l)} style={{
@@ -157,7 +147,7 @@ export default function BacktestPage() {
                 background: limit === l ? "var(--blue)" : "var(--dim)",
                 color: limit === l ? "#fff" : "var(--muted)",
                 border: `1px solid ${limit === l ? "var(--blue)" : "transparent"}`,
-              }}>{l}</button>
+              }}>{l}d</button>
             ))}
           </div>
         </div>
@@ -165,10 +155,10 @@ export default function BacktestPage() {
         {/* Legend */}
         <div style={{ marginLeft: "auto", display: "flex", gap: 14, alignItems: "center" }}>
           {[
-            { color: "#10b981", label: "Long entry ▲" },
-            { color: "#ef4444", label: "Short entry ▼" },
-            { color: "#3b82f6", label: "Take profit ●" },
-            { color: "#f59e0b", label: "Stop loss ●"  },
+            { color: "#10b981", label: "Long ▲" },
+            { color: "#ef4444", label: "Short ▼" },
+            { color: "#3b82f6", label: "TP ●" },
+            { color: "#f59e0b", label: "SL ●" },
           ].map(l => (
             <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: l.color }} />
@@ -185,14 +175,12 @@ export default function BacktestPage() {
             <p style={{ fontWeight: 600, fontSize: 14 }}>{symbol}-USDC · {interval.toUpperCase()}</p>
             {loading && <span style={{ fontSize: 11, color: "var(--muted)" }}>Loading…</span>}
             {markers.length > 0 && (
-              <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 5, background: "rgba(59,130,246,.1)", color: "var(--blue2)", border: "1px solid rgba(59,130,246,.2)" }}>
+              <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 5, background: "rgba(59,130,246,.1)", color: "#60a5fa", border: "1px solid rgba(59,130,246,.2)" }}>
                 {markers.filter(m => m.type === "Entry").length} signals found
               </span>
             )}
           </div>
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>
-            {candles.length} candles · Hyperliquid
-          </span>
+          <span style={{ fontSize: 11, color: "var(--muted)" }}>{candles.length} candles · Hyperliquid</span>
         </div>
 
         {candles.length > 0 ? (
@@ -204,69 +192,11 @@ export default function BacktestPage() {
           </div>
         )}
 
-        {markers.length === 0 && candles.length > 0 && (
-          <div style={{ position: "absolute", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "rgba(13,19,33,.9)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 20px", fontSize: 12, color: "var(--muted)", textAlign: "center", backdropFilter: "blur(8px)" }}>
-            No signals yet — run the backtest command below and they'll appear on the chart
+        {!running && markers.length === 0 && candles.length > 0 && (
+          <div style={{ position: "absolute", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "rgba(13,19,33,.9)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 20px", fontSize: 12, color: "var(--muted)", textAlign: "center", backdropFilter: "blur(8px)", whiteSpace: "nowrap" }}>
+            Hit <strong style={{ color: "#fff" }}>▶ Run Backtest</strong> to see signals on the chart
           </div>
         )}
-      </div>
-
-      {/* ── Indicator toggles ── */}
-      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, padding: 18, marginBottom: 16 }}>
-        <p style={{ fontSize: 12, fontWeight: 600, marginBottom: 12 }}>Active indicators & signals</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
-          {INDICATORS.map(ind => {
-            const on = activeInd.has(ind.id);
-            return (
-              <button key={ind.id} onClick={() => toggleInd(ind.id)} style={{
-                padding: "10px 12px", borderRadius: 10, cursor: "pointer", textAlign: "left",
-                background: on ? `${ind.color}18` : "var(--dim)",
-                border: `1px solid ${on ? ind.color + "55" : "var(--border)"}`,
-                opacity: on ? 1 : 0.45,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: on ? ind.color : "var(--border)" }} />
-                  <span style={{ fontSize: 11, fontWeight: 600, color: on ? ind.color : "var(--muted)" }}>{ind.label}</span>
-                </div>
-                <p style={{ fontSize: 9, color: "var(--muted)", paddingLeft: 12 }}>{ind.desc}</p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Run command ── */}
-      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, padding: 18, marginBottom: 20 }}>
-        <p style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>Run backtest on your machine</p>
-        <div style={{ background: "#060a12", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-          <code style={{ flex: 1, fontSize: 12, color: "var(--green)", fontFamily: "monospace" }}>
-            <span style={{ color: "var(--muted)" }}>$ </span>{buildCmd()}
-          </code>
-          <button onClick={copy} style={{
-            padding: "5px 14px", borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: "pointer",
-            background: copied ? "var(--green)" : "var(--dim)", color: "#fff", border: "none",
-          }}>{copied ? "✓" : "Copy"}</button>
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={startPolling} disabled={polling} style={{
-            padding: "9px 20px", borderRadius: 10, fontSize: 13, fontWeight: 600,
-            cursor: polling ? "not-allowed" : "pointer",
-            background: polling ? "var(--dim)" : "var(--blue)",
-            color: polling ? "var(--muted)" : "#fff", border: "none",
-          }}>
-            {polling ? "⏳ Waiting for results…" : "▶ Watch for results"}
-          </button>
-          {result && (
-            <button onClick={() => { fetch("/api/backtest", { method: "DELETE" }); setResult(null); }} style={{
-              padding: "9px 16px", borderRadius: 10, fontSize: 12, cursor: "pointer",
-              background: "var(--dim)", color: "var(--muted)", border: "1px solid var(--border)",
-            }}>Clear</button>
-          )}
-          {polling && <p style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>Checking every 2s…</p>}
-        </div>
-        <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
-          Results and signals push to this dashboard automatically. Signals will appear on the chart above.
-        </p>
       </div>
 
       {/* ── Results tabs ── */}
@@ -274,7 +204,7 @@ export default function BacktestPage() {
         <div className="slide-in">
           <div style={{ display: "flex", gap: 4, marginBottom: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 4, width: "fit-content" }}>
             {(["stats","trades"] as const).map(t => (
-              <button key={t} onClick={() => setTab(t as "stats"|"trades")} style={{
+              <button key={t} onClick={() => setTab(t)} style={{
                 padding: "7px 18px", borderRadius: 9, fontSize: 12, fontWeight: 600, cursor: "pointer",
                 background: tab === t ? "var(--blue)" : "transparent",
                 color: tab === t ? "#fff" : "var(--muted)", border: "none",
