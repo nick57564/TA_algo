@@ -15,6 +15,7 @@ export interface Trade {
   exit_time: string;
   exit_reason: "tp" | "sl" | "eod" | "end_of_data" | "manual";
   entry_reason?: string;
+  analysis?: string;
   pnl: number;
   size: number;
   sl_price: number;

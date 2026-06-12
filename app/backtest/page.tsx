@@ -17,6 +17,89 @@ const INTERVALS: { label: string; value: string }[] = [
 const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 
 
+function TradesTable({ trades }: { trades: import("@/lib/types").Trade[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (!trades.length)
+    return <div style={{ padding: 32, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14 }}>Run backtest to see individual trades here</div>;
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--dim)" }}>
+            {["","#","Dir","Entry","Exit","Entry $","Exit $","P&L","Result","Trigger"].map(h => (
+              <th key={h} style={{ padding: "10px 12px", textAlign: "left", color: "var(--muted)", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {trades.map((t, i) => {
+            const win  = t.pnl > 0;
+            const open = expanded === i;
+            return (
+              <>
+                <tr key={i} onClick={() => setExpanded(open ? null : i)}
+                  style={{ borderBottom: open ? "none" : "1px solid var(--border)", cursor: "pointer", background: open ? "rgba(59,130,246,.04)" : "transparent" }}>
+                  <td style={{ padding: "9px 8px 9px 14px", color: "var(--muted)", fontSize: 10 }}>{open ? "▼" : "▶"}</td>
+                  <td style={{ padding: "9px 6px", color: "var(--muted)" }}>{i + 1}</td>
+                  <td style={{ padding: "9px 6px" }}>
+                    <span style={{ padding: "2px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+                      background: t.direction === "long" ? "rgba(16,185,129,.12)" : "rgba(239,68,68,.12)",
+                      color: t.direction === "long" ? "var(--green)" : "var(--red)" }}>
+                      {t.direction.toUpperCase()}
+                    </span>
+                  </td>
+                  <td style={{ padding: "9px 6px", color: "var(--muted)", fontSize: 11 }}>{new Date(t.entry_time).toLocaleDateString()}</td>
+                  <td style={{ padding: "9px 6px", color: "var(--muted)", fontSize: 11 }}>{new Date(t.exit_time).toLocaleDateString()}</td>
+                  <td style={{ padding: "9px 6px" }}>${t.entry_price?.toLocaleString()}</td>
+                  <td style={{ padding: "9px 6px" }}>${t.exit_price?.toLocaleString()}</td>
+                  <td style={{ padding: "9px 6px", fontWeight: 700, color: win ? "var(--green)" : "var(--red)" }}>
+                    {win ? "+" : ""}${t.pnl?.toFixed(2)}
+                  </td>
+                  <td style={{ padding: "9px 6px" }}>
+                    <span style={{ padding: "2px 8px", borderRadius: 5, fontSize: 10, fontWeight: 700,
+                      background: win ? "rgba(16,185,129,.12)" : t.exit_reason === "eod" ? "rgba(100,116,139,.12)" : "rgba(239,68,68,.12)",
+                      color: win ? "var(--green)" : t.exit_reason === "eod" ? "var(--muted)" : "var(--red)" }}>
+                      {t.exit_reason?.toUpperCase()}
+                    </span>
+                  </td>
+                  <td style={{ padding: "9px 6px", fontSize: 11, color: "var(--muted)", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {t.entry_reason}
+                  </td>
+                </tr>
+                {open && (
+                  <tr key={`${i}-analysis`} style={{ borderBottom: "1px solid var(--border)", background: "rgba(59,130,246,.04)" }}>
+                    <td colSpan={10} style={{ padding: "0 14px 14px 38px" }}>
+                      <div style={{
+                        background: win ? "rgba(16,185,129,.06)" : "rgba(239,68,68,.06)",
+                        border: `1px solid ${win ? "rgba(16,185,129,.2)" : "rgba(239,68,68,.2)"}`,
+                        borderRadius: 10, padding: "12px 16px",
+                      }}>
+                        <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: win ? "var(--green)" : "var(--red)", marginBottom: 6 }}>
+                          {win ? "✓ Why it worked" : "✗ Why it failed"}
+                        </p>
+                        <p style={{ fontSize: 12, color: "var(--fg, #e2e8f0)", lineHeight: 1.6 }}>{t.analysis ?? "—"}</p>
+                        <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 10, color: "var(--muted)" }}>SL @ ${t.sl_price?.toFixed(0)}</span>
+                          <span style={{ fontSize: 10, color: "var(--muted)" }}>TP @ ${t.tp_price?.toFixed(0)}</span>
+                          <span style={{ fontSize: 10, color: "var(--muted)" }}>
+                            Duration: {Math.round((new Date(t.exit_time).getTime() - new Date(t.entry_time).getTime()) / 3_600_000)}h
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function BacktestPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
   const [candles,  setCandles]  = useState<Candle[]>([]);
@@ -275,50 +358,7 @@ export default function BacktestPage() {
           )}
 
           {tab === "trades" && (
-            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--dim)" }}>
-                    {["#","Dir","Entry date","Exit date","Entry $","Exit $","P&L","Exit","Trigger"].map(h => (
-                      <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "var(--muted)", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.trades?.length ? result.trades.map((t, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={{ padding: "9px 14px", color: "var(--muted)" }}>{i + 1}</td>
-                      <td style={{ padding: "9px 14px" }}>
-                        <span style={{ padding: "2px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700,
-                          background: t.direction === "long" ? "rgba(16,185,129,.1)" : "rgba(239,68,68,.1)",
-                          color: t.direction === "long" ? "var(--green)" : "var(--red)" }}>
-                          {t.direction.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="num" style={{ padding: "9px 14px", color: "var(--muted)", fontSize: 11 }}>{new Date(t.entry_time).toLocaleDateString()}</td>
-                      <td className="num" style={{ padding: "9px 14px", color: "var(--muted)", fontSize: 11 }}>{new Date(t.exit_time).toLocaleDateString()}</td>
-                      <td className="num" style={{ padding: "9px 14px" }}>${t.entry_price?.toLocaleString()}</td>
-                      <td className="num" style={{ padding: "9px 14px" }}>${t.exit_price?.toLocaleString()}</td>
-                      <td className="num" style={{ padding: "9px 14px", fontWeight: 600, color: t.pnl >= 0 ? "var(--green)" : "var(--red)" }}>
-                        {t.pnl >= 0 ? "+" : ""}${t.pnl?.toFixed(2)}
-                      </td>
-                      <td style={{ padding: "9px 14px" }}>
-                        <span style={{ padding: "2px 8px", borderRadius: 5, fontSize: 10,
-                          background: t.exit_reason === "tp" ? "rgba(16,185,129,.1)" : "rgba(239,68,68,.1)",
-                          color: t.exit_reason === "tp" ? "var(--green)" : "var(--red)" }}>
-                          {t.exit_reason?.toUpperCase()}
-                        </span>
-                      </td>
-                      <td style={{ padding: "9px 14px", fontSize: 11, color: "var(--muted)", maxWidth: 340 }}>
-                        {t.entry_reason ?? "—"}
-                      </td>
-                    </tr>
-                  )) : (
-                    <tr><td colSpan={9} style={{ padding: 32, textAlign: "center", color: "var(--muted)" }}>Run backtest to see individual trades here</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <TradesTable trades={result.trades ?? []} />
           )}
         </div>
       )}

@@ -158,6 +158,7 @@ interface Trade {
   pnl: number;        size: number;
   exitReason: "tp" | "sl" | "eod";
   entryReason: string;
+  analysis?: string;
 }
 
 interface Signal {
@@ -168,9 +169,47 @@ interface Signal {
   timeframe: string;
 }
 
+// ── Trade failure analysis ────────────────────────────────────────────────────
+function analyseFailure(t: Trade, allTrades: Trade[], idx: number): string {
+  const holdMs   = t.exitTime - t.entryTime;
+  const holdH    = holdMs / 3_600_000;
+  const pctMove  = Math.abs(t.exitPrice - t.entryPrice) / t.entryPrice * 100;
+
+  // Consecutive losses before this trade
+  let streak = 0;
+  for (let j = idx - 1; j >= 0 && allTrades[j].pnl <= 0; j--) streak++;
+
+  if (holdH <= 4)
+    return `Immediate reversal (held ${holdH.toFixed(0)}h) — false breakout, price never confirmed the move. Consider waiting for a second candle close before entering.`;
+
+  if (holdH <= 24)
+    return `Quick stop-out (held ${holdH.toFixed(0)}h) — entry timing was late in the move. The structural level may have already been absorbed by the market.`;
+
+  if (streak >= 2)
+    return `Part of a ${streak + 1}-trade losing streak — market was ranging/choppy. The 200 SMA filter kept direction right but structure levels were unreliable in this phase.`;
+
+  if (pctMove < 0.5)
+    return `Stop barely moved (${pctMove.toFixed(2)}%) before hitting SL — very tight range, likely noise around the level. A slightly wider SL buffer could have survived this.`;
+
+  return `Structural level failed to hold — the retest level at $${t.slPrice?.toFixed(0)} was broken with conviction, signalling the higher-timeframe trend overpowered the setup.`;
+}
+
+function analyseWin(t: Trade): string {
+  const holdH   = (t.exitTime - t.entryTime) / 3_600_000;
+  const pctMove = Math.abs(t.exitPrice - t.entryPrice) / t.entryPrice * 100;
+
+  if (holdH <= 8)
+    return `Fast TP (${holdH.toFixed(0)}h) — strong momentum, price moved cleanly to target with no pullback.`;
+  if (pctMove >= 2.8)
+    return `Clean trend continuation — price respected the structural level and followed through ${pctMove.toFixed(1)}% to target.`;
+  return `Level held well — price bounced from the retest zone and reached TP in ${holdH.toFixed(0)}h.`;
+}
+
 // ── Main backtest engine ──────────────────────────────────────────────────────
-function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] }) {
-  const { w, d, h4, h1 } = data;
+function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[]; userLimit: number }) {
+  const { w, d, h4, h1, userLimit } = data;
+  // Only scan 1H candles inside the user's requested window (skip the 200-day SMA warmup period)
+  const scanFrom = Date.now() - userLimit * 86_400_000;
 
   const statesW  = computeStructure(w);
   const statesD  = computeStructure(d);
@@ -195,6 +234,7 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
 
   for (let i = 2; i < h1.length; i++) {
     const candle  = h1[i];
+    if (candle.time < scanFrom) continue;   // skip warmup period
     const prevH1  = h1[i - 1];
     const state1h = statesH1[i];
 
@@ -287,6 +327,18 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
     trades.push(open);
   }
 
+  // ── Post-trade analysis ──
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i];
+    if (t.exitReason === "eod") {
+      t.analysis = "Trade still open at end of data — no exit signal triggered yet.";
+    } else if (t.pnl > 0) {
+      t.analysis = analyseWin(t);
+    } else {
+      t.analysis = analyseFailure(t, trades, i);
+    }
+  }
+
   // ── Stats ──
   const winners = trades.filter(t => t.pnl > 0);
   const losers  = trades.filter(t => t.pnl <= 0);
@@ -338,6 +390,7 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
       exit_time:   new Date(t.exitTime).toISOString(),
       exit_reason:  t.exitReason,
       entry_reason: t.entryReason,
+      analysis:     t.analysis,
       pnl:          +t.pnl.toFixed(2),
       size:        +t.size.toFixed(6),
       sl_price:    t.slPrice,
@@ -351,14 +404,16 @@ export async function POST(req: NextRequest) {
   try {
     const { symbol = "BTC", limit = 500, testnet = false } = await req.json();
 
+    // Fetch limit+200 extra days so the 200 SMA has warmup across the FULL selected period
+    const warmup = limit + 200;
     const [w, d, h4, h1] = await Promise.all([
-      fetchCandles(symbol, "1w",  Math.min(limit, 200), testnet),
-      fetchCandles(symbol, "1d",  limit,                testnet),
-      fetchCandles(symbol, "4h",  limit * 4,            testnet),
-      fetchCandles(symbol, "1h",  limit * 24,           testnet),
+      fetchCandles(symbol, "1w",  Math.min(warmup, 400), testnet),
+      fetchCandles(symbol, "1d",  warmup,                testnet),
+      fetchCandles(symbol, "4h",  warmup * 4,            testnet),
+      fetchCandles(symbol, "1h",  warmup * 24,           testnet),
     ]);
 
-    const result = runBacktest({ w, d, h4, h1 });
+    const result = runBacktest({ w, d, h4, h1, userLimit: limit });
     return NextResponse.json(result);
   } catch (e) {
     console.error(e);
