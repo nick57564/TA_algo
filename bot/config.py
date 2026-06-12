@@ -1,9 +1,14 @@
 """All strategy and broker configuration."""
 
 # ── Broker ────────────────────────────────────────────────────────────────────
-HYPERLIQUID_TESTNET = True          # False = live mainnet
-WALLET_ADDRESS      = ""            # your Hyperliquid wallet address
-PRIVATE_KEY         = ""            # your wallet private key (agent key)
+# Keys are loaded from bot/.env — never hardcode them here
+import os
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+HYPERLIQUID_TESTNET = os.getenv("HYPERLIQUID_TESTNET", "true").lower() == "true"
+WALLET_ADDRESS      = os.getenv("WALLET_ADDRESS", "")
+PRIVATE_KEY         = os.getenv("PRIVATE_KEY", "")
 
 # ── Instrument ────────────────────────────────────────────────────────────────
 SYMBOL      = "BTC"                 # Hyperliquid symbol (no /USD suffix)
@@ -36,5 +41,5 @@ MTF_PAIRS = [
 ]
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
-DASHBOARD_URL = "http://localhost:3000"   # set to your Vercel URL in production
-BOT_SECRET    = ""                        # match BOT_SECRET env var on dashboard
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://localhost:3000")
+BOT_SECRET    = os.getenv("BOT_SECRET", "")
