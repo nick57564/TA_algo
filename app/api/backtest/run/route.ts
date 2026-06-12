@@ -32,14 +32,14 @@ async function fetchCandles(symbol: string, interval: string, limit: number, tes
     .sort((a, b) => a.time - b.time);
 }
 
-// ── EMA ──────────────────────────────────────────────────────────────────────
-function ema(values: number[], period: number): number[] {
-  const k = 2 / (period + 1);
-  const out: number[] = [];
-  let prev = values[0];
-  for (const v of values) {
-    prev = v * k + prev * (1 - k);
-    out.push(prev);
+// ── 200-period SMA ────────────────────────────────────────────────────────────
+function sma200(values: number[]): (number | null)[] {
+  const out: (number | null)[] = [];
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= 200) sum -= values[i - 200];
+    out.push(i >= 199 ? sum / 200 : null);
   }
   return out;
 }
@@ -175,7 +175,7 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
   const statesD  = computeStructure(d);
   const statesH4 = computeStructure(h4);
   const statesH1 = computeStructure(h1);
-  const emaD     = ema(d.map(c => c.close), 50);
+  const smaD     = sma200(d.map(c => c.close));
 
   const trades:  Trade[]  = [];
   const signals: Signal[] = [];
@@ -217,11 +217,11 @@ function runBacktest(data: { w: OHLCV[]; d: OHLCV[]; h4: OHLCV[]; h1: OHLCV[] })
       continue;
     }
 
-    // ── EMA bias ──
-    const dIdx  = nearestIdx(d, candle.time);
-    const emaVal = emaD[dIdx];
-    if (!emaVal) continue;
-    const emaBias: "long" | "short" = d[dIdx].close > emaVal ? "long" : "short";
+    // ── 200 SMA bias: above = long only, below = short only ──
+    const dIdx   = nearestIdx(d, candle.time);
+    const smaVal = smaD[dIdx];
+    if (smaVal === null) continue;   // need 200 daily candles of warmup
+    const emaBias: "long" | "short" = d[dIdx].close > smaVal ? "long" : "short";
 
     // ── MTF alignment ──
     const wIdx  = nearestIdx(w,  candle.time);

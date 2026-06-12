@@ -31,7 +31,8 @@ export default function BacktestPage() {
   const loadCandles = useCallback(async (sym: string, iv: string, lim: number) => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/candles?symbol=${sym}&interval=${iv}&limit=${lim}&testnet=false`);
+      // fetch 200 extra candles so the 200 MA has warmup and covers the full chart
+      const r = await fetch(`/api/candles?symbol=${sym}&interval=${iv}&limit=${lim + 200}&testnet=false`);
       const d = await r.json();
       if (Array.isArray(d)) setCandles(d);
     } catch {}
