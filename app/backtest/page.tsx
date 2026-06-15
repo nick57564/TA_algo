@@ -70,9 +70,9 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
                   </td>
                   <td style={{ padding: "9px 6px" }}>
                     <span style={{ padding: "2px 8px", borderRadius: 5, fontSize: 10, fontWeight: 700,
-                      background: win ? "rgba(16,185,129,.12)" : t.exit_reason === "eod" ? "rgba(100,116,139,.12)" : "rgba(239,68,68,.12)",
-                      color: win ? "var(--green)" : t.exit_reason === "eod" ? "var(--muted)" : "var(--red)" }}>
-                      {t.exit_reason?.toUpperCase()}
+                      background: win ? "rgba(16,185,129,.12)" : t.exit_reason === "eod" ? "rgba(100,116,139,.12)" : t.exit_reason === "be" ? "rgba(59,130,246,.12)" : "rgba(239,68,68,.12)",
+                      color: win ? "var(--green)" : t.exit_reason === "eod" ? "var(--muted)" : t.exit_reason === "be" ? "#60a5fa" : "var(--red)" }}>
+                      {t.exit_reason === "be" ? "BE" : t.exit_reason?.toUpperCase()}
                     </span>
                   </td>
                   <td style={{ padding: "9px 6px", fontSize: 11, color: "var(--muted)", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

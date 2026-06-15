@@ -198,6 +198,7 @@ function analyse(
   ma: number[], bars: Bar[]
 ): string {
   if (exitReason === "eod") return "Still open at end of data.";
+  if (exitReason === "be")  return "✅ Breakeven exit — stop was trailed to entry after price moved 1R in our favour. Protected capital, no loss.";
 
   // ── Context signals ──────────────────────────────────────────────────────
   const maAtEntry  = ma[entryIdx];
@@ -253,7 +254,9 @@ interface Trade {
   entryPrice: number; exitPrice: number;
   slPrice: number; tpPrice: number;
   pnl: number; size: number;
-  exitReason: "tp" | "sl" | "eod";
+  slDist: number;          // original SL distance (used for trailing)
+  trailedToBreakeven: boolean;
+  exitReason: "tp" | "sl" | "be" | "eod";
   entryReason: string; analysis: string;
   entryIdx: number;
 }
@@ -275,33 +278,45 @@ function atr(bars: Bar[], idx: number, n = 10): number {
 // ── Engine ────────────────────────────────────────────────────────────────────
 function runEngine(bars: Bar[], ma: number[]) {
   const RISK        = 0.01;   // 1% risk per trade
-  const ATR_SL_MULT = 1.5;    // SL = 1.5× ATR (adapts to actual volatility)
+  const ATR_SL_MULT = 1.5;    // SL = 1.5× ATR
   const RR          = 3;      // 3:1 reward-to-risk
   const CAP         = 10_000;
-  const COOLDOWN    = 1;      // bars to wait after a loss before new entry
-  const MAX_DIST_MA = 0.08;   // skip if price >8% from 200 MA (overextended)
-  const MA_SLOPE_N  = 10;     // bars to measure MA slope over
+  const MAX_DIST_MA = 0.10;   // skip if price >10% from 200 MA
+  const MA_SLOPE_N  = 10;
 
-  const trades: Trade[]  = [];
+  const trades: Trade[]   = [];
   const signals: object[] = [];
   let balance    = CAP;
-  let open: Trade | null = null;
+  let open: Trade | null  = null;
   let lossStreak = 0;
-  let cooldown   = 0;         // bars remaining in cooldown
 
-  // Start after full 200-bar warmup so the 200 SMA is meaningful
+  // Start after full 200-bar warmup
   for (let i = 205; i < bars.length; i++) {
     const bar = bars[i];
-    if (cooldown > 0) cooldown--;
 
     // ── manage open trade ──
     if (open) {
+      // Trail SL to breakeven once price moves 1R in our favour
+      if (!open.trailedToBreakeven) {
+        const favMove = open.direction === "long"
+          ? bar.high - open.entryPrice
+          : open.entryPrice - bar.low;
+        if (favMove >= open.slDist) {
+          // Lock in breakeven (+tiny buffer so spread doesn't stop us)
+          const buf = open.entryPrice * 0.001;
+          open.slPrice = open.direction === "long"
+            ? open.entryPrice + buf
+            : open.entryPrice - buf;
+          open.trailedToBreakeven = true;
+        }
+      }
+
       let closed = false;
       if (open.direction === "long") {
-        if (bar.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = "sl"; closed = true; }
+        if (bar.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
         if (bar.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       } else {
-        if (bar.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = "sl"; closed = true; }
+        if (bar.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
         if (bar.low  <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       }
       if (closed) {
@@ -311,48 +326,40 @@ function runEngine(bars: Bar[], ma: number[]) {
         balance    += open.pnl;
         const holdD = Math.round((open.exitTime - open.entryTime) / 86_400_000);
         open.analysis = analyse(open.pnl, holdD, open.exitReason, lossStreak, open.direction, open.entryPrice, open.entryIdx, ma, bars);
-        if (open.pnl <= 0) { lossStreak++; cooldown = COOLDOWN; } else lossStreak = 0;
-        signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : "Exit SL", price: open.exitPrice });
+        if (open.pnl < 0) lossStreak++; else lossStreak = 0;
+        signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : open.exitReason === "be" ? "Exit BE" : "Exit SL", price: open.exitPrice });
         trades.push(open);
         open = null;
       }
       continue;
     }
 
-    // ── skip cooldown ──
-    if (cooldown > 0) continue;
-
     // ── check entry ──
     const aboveMA = bar.close > ma[i];
     const side    = aboveMA ? "bullish" : "bearish";
     const dir     = aboveMA ? "long"    : "short";
 
-    // MA slope — used as bonus confirmation, not a hard gate
-    const maSlope = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
-
-    // Hard filter: price must not be overextended from MA
+    const maSlope    = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
     const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
     if (distFromMA > MAX_DIST_MA) continue;
 
     const patternResult = detectPattern(bars, i, side);
     if (!patternResult) continue;
 
-    // ── Confluence scoring — need at least 2 of these 4 to confirm ───────────
+    // ── Confluence: at least 1 confirmation ──────────────────────────────────
     const barRsi   = rsi(bars, i);
     const volRatio = volumeRatio(bars, i);
     const slopePct = Math.abs(maSlope) / ma[Math.max(0, i - MA_SLOPE_N)] * 100;
 
     const confirmations: string[] = [];
-    if (dir === "long"  && barRsi < 60)  confirmations.push(`RSI ${barRsi.toFixed(0)} — room to run`);
-    if (dir === "short" && barRsi > 40)  confirmations.push(`RSI ${barRsi.toFixed(0)} — room to fall`);
-    if (volRatio >= 1.2)                 confirmations.push(`volume ${volRatio.toFixed(1)}× avg`);
-    if (slopePct > 0.5)                  confirmations.push(`MA slope ${slopePct.toFixed(1)}%/10d`);
-    if (patternResult.engulfing)         confirmations.push(dir === "long" ? "bullish engulfing on breakout" : "bearish engulfing on breakdown");
+    if (dir === "long"  && barRsi < 65)  confirmations.push(`RSI ${barRsi.toFixed(0)}`);
+    if (dir === "short" && barRsi > 35)  confirmations.push(`RSI ${barRsi.toFixed(0)}`);
+    if (volRatio >= 1.1)                 confirmations.push(`vol ${volRatio.toFixed(1)}×`);
+    if (slopePct > 0.3)                  confirmations.push(`MA slope ${slopePct.toFixed(1)}%`);
+    if (patternResult.engulfing)         confirmations.push("engulf confirm");
 
-    // Require at least 1 confirmation beyond the pattern + MA position
     if (confirmations.length < 1) continue;
 
-    // ATR-based SL/TP (adapts to current volatility)
     const barAtr  = atr(bars, i);
     const slDist  = barAtr * ATR_SL_MULT;
     const slPrice = dir === "long"  ? bar.close - slDist : bar.close + slDist;
@@ -361,12 +368,13 @@ function runEngine(bars: Bar[], ma: number[]) {
     if (size <= 0) continue;
 
     const slPct   = (slDist / bar.close * 100).toFixed(1);
-    const maLabel = `200 MA @ $${ma[i].toFixed(0)} (${maSlope > 0 ? "↑ rising" : "↓ falling"})`;
+    const maLabel = `200 MA @ $${ma[i].toFixed(0)} (${maSlope > 0 ? "↑" : "↓"})`;
     open = {
       direction: dir, entryTime: bar.time, exitTime: 0,
-      entryPrice: bar.close, exitPrice: 0, slPrice, tpPrice, size,
-      pnl: 0, exitReason: "eod", entryIdx: i,
-      entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}%`,
+      entryPrice: bar.close, exitPrice: 0, slPrice, tpPrice,
+      slDist, trailedToBreakeven: false,
+      size, pnl: 0, exitReason: "eod", entryIdx: i,
+      entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}% (trail to BE)`,
       analysis: "",
     };
     signals.push({ timestamp: new Date(bar.time).toISOString(), direction: dir, type: "Entry", price: bar.close });
@@ -433,7 +441,7 @@ export async function POST(req: NextRequest) {
         exit_price:   +t.exitPrice.toFixed(2),
         entry_time:   new Date(t.entryTime).toISOString(),
         exit_time:    new Date(t.exitTime || t.entryTime).toISOString(),
-        exit_reason:  t.exitReason,
+        exit_reason:  t.exitReason as string,
         entry_reason: t.entryReason,
         analysis:     t.analysis,
         pnl:          +t.pnl.toFixed(2),
