@@ -13,7 +13,7 @@ export interface Trade {
   exit_price: number;
   entry_time: string;
   exit_time: string;
-  exit_reason: "tp" | "sl" | "eod" | "end_of_data" | "manual";
+  exit_reason: "tp" | "sl" | "be" | "eod" | "end_of_data" | "manual";
   entry_reason?: string;
   analysis?: string;
   pnl: number;
