@@ -368,11 +368,15 @@ function runEngine(bars: Bar[], ma: number[]) {
     const dir     = aboveMA ? "long"    : "short";
 
     const maSlope    = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
-    const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
-    if (distFromMA > MAX_DIST_MA) continue;
 
     const patternResult = detectPattern(bars, i, side);
     if (!patternResult) continue;
+
+    // Structure patterns (H&S, Double/Triple Top/Bottom) form AFTER price has moved
+    // far from the MA — don't apply distance filter to them, only to candle patterns
+    const isStructurePattern = patternResult.name.includes("Head") || patternResult.name.includes("Double") || patternResult.name.includes("Triple");
+    const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
+    if (!isStructurePattern && distFromMA > MAX_DIST_MA) continue;
 
     // ── Confluence: at least 1 confirmation ──────────────────────────────────
     const barRsi   = rsi(bars, i);
