@@ -169,7 +169,7 @@ function analyse(
     reasons.push(`price was ${distPct.toFixed(1)}% from the 200 MA — stretched, increasing reversal risk`);
   }
   if (slTooTight) {
-    reasons.push(`the 1.5% stop-loss was too tight: BTC was averaging ${avgDayRange.toFixed(1)}% daily candle range, so normal daily noise could hit the stop`);
+    reasons.push(`stop-loss was tight relative to BTC's ${avgDayRange.toFixed(1)}% average daily range — normal noise hit the stop`);
   }
   if (streak >= 2) {
     reasons.push(`this was loss #${streak + 1} in a row — market was choppy with no sustained trend`);
@@ -197,21 +197,40 @@ interface Trade {
   entryIdx: number;
 }
 
+// ── ATR (average true range over last N bars) ─────────────────────────────────
+function atr(bars: Bar[], idx: number, n = 10): number {
+  let sum = 0, count = 0;
+  for (let i = Math.max(1, idx - n + 1); i <= idx; i++) {
+    const tr = Math.max(
+      bars[i].high - bars[i].low,
+      Math.abs(bars[i].high - bars[i - 1].close),
+      Math.abs(bars[i].low  - bars[i - 1].close),
+    );
+    sum += tr; count++;
+  }
+  return count > 0 ? sum / count : bars[idx].high - bars[idx].low;
+}
+
 // ── Engine ────────────────────────────────────────────────────────────────────
 function runEngine(bars: Bar[], ma: number[]) {
-  const RISK   = 0.01;   // 1% risk per trade
-  const SL_PCT = 0.015;  // 1.5% stop-loss
-  const TP_PCT = 0.045;  // 4.5% take-profit (3:1 R:R)
-  const CAP    = 10_000;
+  const RISK        = 0.01;   // 1% risk per trade
+  const ATR_SL_MULT = 1.5;    // SL = 1.5× ATR (adapts to actual volatility)
+  const RR          = 3;      // 3:1 reward-to-risk
+  const CAP         = 10_000;
+  const COOLDOWN    = 3;      // bars to wait after a loss before new entry
+  const MAX_DIST_MA = 0.12;   // skip if price >12% from 200 MA (overextended)
+  const MA_SLOPE_N  = 10;     // bars to measure MA slope over
 
   const trades: Trade[]  = [];
   const signals: object[] = [];
-  let balance = CAP;
-  let open: Trade | null  = null;
+  let balance    = CAP;
+  let open: Trade | null = null;
   let lossStreak = 0;
+  let cooldown   = 0;         // bars remaining in cooldown
 
-  for (let i = 5; i < bars.length; i++) {
+  for (let i = 10; i < bars.length; i++) {
     const bar = bars[i];
+    if (cooldown > 0) cooldown--;
 
     // ── manage open trade ──
     if (open) {
@@ -230,7 +249,7 @@ function runEngine(bars: Bar[], ma: number[]) {
         balance    += open.pnl;
         const holdD = Math.round((open.exitTime - open.entryTime) / 86_400_000);
         open.analysis = analyse(open.pnl, holdD, open.exitReason, lossStreak, open.direction, open.entryPrice, open.entryIdx, ma, bars);
-        if (open.pnl <= 0) lossStreak++; else lossStreak = 0;
+        if (open.pnl <= 0) { lossStreak++; cooldown = COOLDOWN; } else lossStreak = 0;
         signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : "Exit SL", price: open.exitPrice });
         trades.push(open);
         open = null;
@@ -238,26 +257,41 @@ function runEngine(bars: Bar[], ma: number[]) {
       continue;
     }
 
+    // ── skip cooldown ──
+    if (cooldown > 0) continue;
+
     // ── check entry ──
     const aboveMA = bar.close > ma[i];
     const side    = aboveMA ? "bullish" : "bearish";
     const dir     = aboveMA ? "long"    : "short";
 
+    // Filter 1: MA must be sloping in trade direction
+    const maSlope = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
+    if (dir === "long"  && maSlope <= 0) continue;
+    if (dir === "short" && maSlope >= 0) continue;
+
+    // Filter 2: price must not be overextended from MA
+    const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
+    if (distFromMA > MAX_DIST_MA) continue;
+
     const pattern = detectPattern(bars, i, side);
     if (!pattern) continue;
 
-    const slPrice = dir === "long"  ? bar.close * (1 - SL_PCT) : bar.close * (1 + SL_PCT);
-    const tpPrice = dir === "long"  ? bar.close * (1 + TP_PCT) : bar.close * (1 - TP_PCT);
-    const slDist  = Math.abs(bar.close - slPrice);
+    // ATR-based SL/TP (adapts to current volatility)
+    const barAtr  = atr(bars, i);
+    const slDist  = barAtr * ATR_SL_MULT;
+    const slPrice = dir === "long"  ? bar.close - slDist : bar.close + slDist;
+    const tpPrice = dir === "long"  ? bar.close + slDist * RR : bar.close - slDist * RR;
     const size    = slDist > 0 ? (balance * RISK) / slDist : 0;
     if (size <= 0) continue;
 
-    const maLabel = `200 MA @ $${ma[i].toFixed(0)}`;
+    const slPct   = (slDist / bar.close * 100).toFixed(1);
+    const maLabel = `200 MA @ $${ma[i].toFixed(0)} (slope ${maSlope > 0 ? "↑" : "↓"})`;
     open = {
       direction: dir, entryTime: bar.time, exitTime: 0,
       entryPrice: bar.close, exitPrice: 0, slPrice, tpPrice, size,
       pnl: 0, exitReason: "eod", entryIdx: i,
-      entryReason: `${pattern} · ${dir === "long" ? "Above" : "Below"} ${maLabel}`,
+      entryReason: `${pattern} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · SL ${slPct}% (${barAtr.toFixed(0)} ATR)`,
       analysis: "",
     };
     signals.push({ timestamp: new Date(bar.time).toISOString(), direction: dir, type: "Entry", price: bar.close });
