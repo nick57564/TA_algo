@@ -150,6 +150,44 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
   if (side === "bearish" && bearEngulf) return { name: "📉 Bearish Engulfing — red candle fully swallowed the previous green candle", engulfing: true };
   if (side === "bullish" && bullEngulf) return { name: "📈 Bullish Engulfing — green candle fully swallowed the previous red candle", engulfing: true };
 
+  // ── Hammer (bullish reversal) — small body at top, long lower wick ───────────
+  // Body = |close - open|, lower wick = open/close min - low, upper wick = high - open/close max
+  const body      = Math.abs(bars[i].close - bars[i].open);
+  const bodyTop   = Math.max(bars[i].close, bars[i].open);
+  const bodyBot   = Math.min(bars[i].close, bars[i].open);
+  const lowerWick = bodyBot - bars[i].low;
+  const upperWick = bars[i].high - bodyTop;
+  const bodyPct   = body / bars[i].close;
+
+  if (side === "bullish" && lowerWick >= body * 2 && upperWick < body * 0.5 && bodyPct < 0.025) {
+    return { name: "🔨 Hammer — long lower wick shows buyers stepped in and rejected the low", engulfing: bullEngulf };
+  }
+
+  // ── Shooting Star (bearish reversal) — small body at bottom, long upper wick ──
+  if (side === "bearish" && upperWick >= body * 2 && lowerWick < body * 0.5 && bodyPct < 0.025) {
+    return { name: "🌠 Shooting Star — long upper wick shows sellers rejected the high", engulfing: bearEngulf };
+  }
+
+  // ── Morning Star (3-candle bullish reversal) ─────────────────────────────────
+  if (side === "bullish" && i >= 2) {
+    const c1 = bars[i - 2], c2 = bars[i - 1], c3 = bars[i];
+    const bigDown  = c1.close < c1.open && (c1.open - c1.close) / c1.open > 0.015;
+    const smallMid = Math.abs(c2.close - c2.open) / c2.open < 0.01;
+    const bigUp    = c3.close > c3.open && (c3.close - c3.open) / c3.open > 0.015;
+    if (bigDown && smallMid && bigUp && c2.low < c1.low)
+      return { name: "🌅 Morning Star — three-candle reversal: big down, doji pause, big up", engulfing: false };
+  }
+
+  // ── Evening Star (3-candle bearish reversal) ─────────────────────────────────
+  if (side === "bearish" && i >= 2) {
+    const c1 = bars[i - 2], c2 = bars[i - 1], c3 = bars[i];
+    const bigUp    = c1.close > c1.open && (c1.close - c1.open) / c1.open > 0.015;
+    const smallMid = Math.abs(c2.close - c2.open) / c2.open < 0.01;
+    const bigDown  = c3.close < c3.open && (c3.open - c3.close) / c3.open > 0.015;
+    if (bigUp && smallMid && bigDown && c2.high > c1.high)
+      return { name: "🌆 Evening Star — three-candle reversal: big up, doji pause, big down", engulfing: false };
+  }
+
   return null;
 }
 
@@ -241,7 +279,7 @@ function runEngine(bars: Bar[], ma: number[]) {
   const RR          = 3;      // 3:1 reward-to-risk
   const CAP         = 10_000;
   const COOLDOWN    = 1;      // bars to wait after a loss before new entry
-  const MAX_DIST_MA = 0.12;   // skip if price >12% from 200 MA (overextended)
+  const MAX_DIST_MA = 0.08;   // skip if price >8% from 200 MA (overextended)
   const MA_SLOPE_N  = 10;     // bars to measure MA slope over
 
   const trades: Trade[]  = [];
