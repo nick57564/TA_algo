@@ -5,8 +5,8 @@ export const maxDuration = 60;
 
 const HL = "https://api.hyperliquid.xyz/info";
 
-interface RawCandle { t: number; o: string; h: string; l: string; c: string; }
-interface Bar { time: number; open: number; high: number; low: number; close: number; }
+interface RawCandle { t: number; o: string; h: string; l: string; c: string; v: string; }
+interface Bar { time: number; open: number; high: number; low: number; close: number; volume: number; }
 
 async function fetchBars(symbol: string, days: number): Promise<Bar[]> {
   const end   = Date.now();
@@ -17,8 +17,27 @@ async function fetchBars(symbol: string, days: number): Promise<Bar[]> {
     body: JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval: "1d", startTime: start, endTime: end } }),
   });
   const raw: RawCandle[] = await resp.json();
-  return raw.map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c }))
+  return raw.map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c, volume: +c.v }))
             .sort((a, b) => a.time - b.time);
+}
+
+// ── RSI(14) ───────────────────────────────────────────────────────────────────
+function rsi(bars: Bar[], idx: number, period = 14): number {
+  if (idx < period) return 50;
+  let gains = 0, losses = 0;
+  for (let i = idx - period + 1; i <= idx; i++) {
+    const d = bars[i].close - bars[i - 1].close;
+    if (d > 0) gains += d; else losses -= d;
+  }
+  const rs = losses === 0 ? 100 : gains / losses;
+  return 100 - 100 / (1 + rs);
+}
+
+// ── Volume spike (bar volume vs N-bar average) ────────────────────────────────
+function volumeRatio(bars: Bar[], idx: number, n = 10): number {
+  if (idx < n) return 1;
+  const avg = bars.slice(idx - n, idx).reduce((s, b) => s + b.volume, 0) / n;
+  return avg > 0 ? bars[idx].volume / avg : 1;
 }
 
 // ── 200 SMA (expanding window so line starts from bar 1) ──────────────────────
@@ -277,6 +296,26 @@ function runEngine(bars: Bar[], ma: number[]) {
     const pattern = detectPattern(bars, i, side);
     if (!pattern) continue;
 
+    // ── Confluence scoring (need 2+ confirmations besides the pattern) ────────
+    const barRsi   = rsi(bars, i);
+    const volRatio = volumeRatio(bars, i);
+
+    const confirmations: string[] = [];
+
+    // RSI confirmation
+    if (dir === "long"  && barRsi < 60) confirmations.push(`RSI ${barRsi.toFixed(0)} (not overbought)`);
+    if (dir === "short" && barRsi > 40) confirmations.push(`RSI ${barRsi.toFixed(0)} (not oversold)`);
+
+    // Volume spike confirmation
+    if (volRatio >= 1.2) confirmations.push(`volume ${volRatio.toFixed(1)}× avg (strong interest)`);
+
+    // MA slope strength (steep slope = strong trend)
+    const slopePct = Math.abs(maSlope) / ma[Math.max(0, i - MA_SLOPE_N)] * 100;
+    if (slopePct > 0.5) confirmations.push(`MA trending strongly (${slopePct.toFixed(1)}%/10d)`);
+
+    // Require at least 1 extra confirmation beyond the pattern + MA position
+    if (confirmations.length === 0) continue;
+
     // ATR-based SL/TP (adapts to current volatility)
     const barAtr  = atr(bars, i);
     const slDist  = barAtr * ATR_SL_MULT;
@@ -291,7 +330,7 @@ function runEngine(bars: Bar[], ma: number[]) {
       direction: dir, entryTime: bar.time, exitTime: 0,
       entryPrice: bar.close, exitPrice: 0, slPrice, tpPrice, size,
       pnl: 0, exitReason: "eod", entryIdx: i,
-      entryReason: `${pattern} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · SL ${slPct}% (${barAtr.toFixed(0)} ATR)`,
+      entryReason: `${pattern} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}%`,
       analysis: "",
     };
     signals.push({ timestamp: new Date(bar.time).toISOString(), direction: dir, type: "Entry", price: bar.close });
