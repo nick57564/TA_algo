@@ -131,15 +131,58 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): str
 }
 
 // ── Post-trade analysis ───────────────────────────────────────────────────────
-function analyse(pnl: number, holdDays: number, exitReason: string, streak: number): string {
+function analyse(
+  pnl: number, holdDays: number, exitReason: string, streak: number,
+  direction: "long" | "short", entryPrice: number, entryIdx: number,
+  ma: number[], bars: Bar[]
+): string {
   if (exitReason === "eod") return "Still open at end of data.";
+
+  // ── Context signals ──────────────────────────────────────────────────────
+  const maAtEntry  = ma[entryIdx];
+  const maSlope    = maAtEntry - ma[Math.max(0, entryIdx - 5)];          // 5-day MA slope
+  const distPct    = Math.abs(entryPrice - maAtEntry) / maAtEntry * 100; // % from MA
+  const isMAligned = (direction === "long" && maSlope > 0) || (direction === "short" && maSlope < 0);
+
+  // Recent daily range (avg high-low of last 5 bars) vs SL distance
+  const recentBars  = bars.slice(Math.max(0, entryIdx - 5), entryIdx);
+  const avgDayRange = recentBars.reduce((s, b) => s + (b.high - b.low) / b.close * 100, 0) / (recentBars.length || 1);
+  const SL_PCT      = 0.015;
+  const slTooTight  = avgDayRange > SL_PCT * 100 * 1.5; // daily noise > 1.5× SL
+
   if (pnl > 0) {
-    if (holdDays <= 2) return `Fast win in ${holdDays}d — the pattern had strong immediate follow-through.`;
-    return `Pattern played out in ${holdDays} days — price respected the signal and hit the target.`;
+    const extra = isMAligned ? " MA trend was in your favour." : "";
+    if (holdDays <= 2) return `✅ Fast win in ${holdDays}d — strong immediate follow-through after the pattern.${extra}`;
+    return `✅ Clean win in ${holdDays} days — price respected the signal and hit the target.${extra}`;
   }
-  if (holdDays <= 1) return `False signal — price reversed within a day. The pattern formed but lacked momentum. This often happens in low-volume or news-driven sessions.`;
-  if (streak >= 2) return `${streak + 1} losses in a row — market was ranging with no clear momentum. Patterns formed but the trend wasn't strong enough to follow through.`;
-  return `Stop hit after ${holdDays} days — the pattern was valid but a stronger opposing move took over. Could indicate a larger structure shift.`;
+
+  // ── Build specific failure reasons ───────────────────────────────────────
+  const reasons: string[] = [];
+
+  if (!isMAligned) {
+    const slopeDir = maSlope > 0 ? "rising" : "falling";
+    reasons.push(`the 200 MA was ${slopeDir} (${slopeDir === "rising" ? "bullish" : "bearish"} slope) which worked AGAINST this ${direction} trade`);
+  }
+  if (distPct > 8) {
+    reasons.push(`price was ${distPct.toFixed(1)}% above/below the 200 MA at entry — highly extended and prone to reversal`);
+  } else if (distPct > 5) {
+    reasons.push(`price was ${distPct.toFixed(1)}% from the 200 MA — stretched, increasing reversal risk`);
+  }
+  if (slTooTight) {
+    reasons.push(`the 1.5% stop-loss was too tight: BTC was averaging ${avgDayRange.toFixed(1)}% daily candle range, so normal daily noise could hit the stop`);
+  }
+  if (streak >= 2) {
+    reasons.push(`this was loss #${streak + 1} in a row — market was choppy with no sustained trend`);
+  }
+  if (holdDays <= 1) {
+    reasons.push(`price reversed the same day — the pattern fired but had zero follow-through momentum`);
+  }
+
+  if (reasons.length === 0) {
+    return `❌ Stop hit after ${holdDays}d — the setup looked valid but a stronger opposing move took over. Can happen even in good trades.`;
+  }
+
+  return `❌ Stop hit after ${holdDays}d. Why it failed: ${reasons.join("; ")}.`;
 }
 
 // ── Trade interface ───────────────────────────────────────────────────────────
@@ -151,6 +194,7 @@ interface Trade {
   pnl: number; size: number;
   exitReason: "tp" | "sl" | "eod";
   entryReason: string; analysis: string;
+  entryIdx: number;
 }
 
 // ── Engine ────────────────────────────────────────────────────────────────────
@@ -185,7 +229,7 @@ function runEngine(bars: Bar[], ma: number[]) {
         open.pnl    = (open.exitPrice - open.entryPrice) * mult * open.size;
         balance    += open.pnl;
         const holdD = Math.round((open.exitTime - open.entryTime) / 86_400_000);
-        open.analysis = analyse(open.pnl, holdD, open.exitReason, lossStreak);
+        open.analysis = analyse(open.pnl, holdD, open.exitReason, lossStreak, open.direction, open.entryPrice, open.entryIdx, ma, bars);
         if (open.pnl <= 0) lossStreak++; else lossStreak = 0;
         signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : "Exit SL", price: open.exitPrice });
         trades.push(open);
@@ -212,7 +256,7 @@ function runEngine(bars: Bar[], ma: number[]) {
     open = {
       direction: dir, entryTime: bar.time, exitTime: 0,
       entryPrice: bar.close, exitPrice: 0, slPrice, tpPrice, size,
-      pnl: 0, exitReason: "eod",
+      pnl: 0, exitReason: "eod", entryIdx: i,
       entryReason: `${pattern} · ${dir === "long" ? "Above" : "Below"} ${maLabel}`,
       analysis: "",
     };
