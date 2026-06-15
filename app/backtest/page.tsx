@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import StatCard from "@/components/StatCard";
 import type { BacktestResult } from "@/lib/types";
-import type { Candle, SignalMarker, MAPoint } from "@/components/CandleChart";
+import type { Candle, SignalMarker, MAPoint, HighlightTrade } from "@/components/CandleChart";
 
 const CandleChart = dynamic(() => import("@/components/CandleChart"), { ssr: false });
 
@@ -17,7 +17,11 @@ const INTERVALS: { label: string; value: string }[] = [
 const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 
 
-function TradesTable({ trades }: { trades: import("@/lib/types").Trade[] }) {
+function TradesTable({ trades, selectedIdx, onSelect }: {
+  trades: import("@/lib/types").Trade[];
+  selectedIdx: number | null;
+  onSelect: (idx: number | null, trade: import("@/lib/types").Trade | null) => void;
+}) {
   const [expanded, setExpanded] = useState<number | null>(null);
 
   if (!trades.length)
@@ -35,12 +39,19 @@ function TradesTable({ trades }: { trades: import("@/lib/types").Trade[] }) {
         </thead>
         <tbody>
           {trades.map((t, i) => {
-            const win  = t.pnl > 0;
-            const open = expanded === i;
+            const win      = t.pnl > 0;
+            const open     = expanded === i;
+            const selected = selectedIdx === i;
             return (
               <>
-                <tr key={i} onClick={() => setExpanded(open ? null : i)}
-                  style={{ borderBottom: open ? "none" : "1px solid var(--border)", cursor: "pointer", background: open ? "rgba(59,130,246,.04)" : "transparent" }}>
+                <tr key={i} onClick={() => {
+                    setExpanded(open ? null : i);
+                    onSelect(selected ? null : i, selected ? null : t);
+                  }}
+                  style={{ borderBottom: open ? "none" : "1px solid var(--border)", cursor: "pointer",
+                    background: selected ? "rgba(59,130,246,.1)" : open ? "rgba(59,130,246,.04)" : "transparent",
+                    outline: selected ? "1px solid rgba(59,130,246,.4)" : "none",
+                  }}>
                   <td style={{ padding: "9px 8px 9px 14px", color: "var(--muted)", fontSize: 10 }}>{open ? "▼" : "▶"}</td>
                   <td style={{ padding: "9px 6px", color: "var(--muted)" }}>{i + 1}</td>
                   <td style={{ padding: "9px 6px" }}>
@@ -110,6 +121,8 @@ export default function BacktestPage() {
   const [running,  setRunning]  = useState(false);
   const [runErr,   setRunErr]   = useState<string | null>(null);
   const [tab,      setTab]      = useState<"stats"|"trades">("stats");
+  const [selectedTradeIdx, setSelectedTradeIdx] = useState<number | null>(null);
+  const [highlightTrade,   setHighlightTrade]   = useState<HighlightTrade | null>(null);
 
   const loadCandles = useCallback(async (sym: string, iv: string, lim: number) => {
     setLoading(true);
@@ -293,7 +306,7 @@ export default function BacktestPage() {
         </div>
 
         {candles.length > 0 ? (
-          <CandleChart candles={candles} signals={markers} maLine={ma200} maLabel="200 MA" height={480} />
+          <CandleChart candles={candles} signals={markers} maLine={ma200} maLabel="200 MA" height={480} highlightTrade={highlightTrade} />
         ) : (
           <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
             <div style={{ width: 32, height: 32, border: "2px solid var(--blue)", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -358,7 +371,19 @@ export default function BacktestPage() {
           )}
 
           {tab === "trades" && (
-            <TradesTable trades={result.trades ?? []} />
+            <TradesTable
+              trades={result.trades ?? []}
+              selectedIdx={selectedTradeIdx}
+              onSelect={(idx, trade) => {
+                setSelectedTradeIdx(idx);
+                setHighlightTrade(trade ? {
+                  entryTime: new Date(trade.entry_time).getTime(),
+                  exitTime:  new Date(trade.exit_time).getTime(),
+                  direction: trade.direction,
+                } : null);
+                if (trade) setTab("trades");
+              }}
+            />
           )}
         </div>
       )}

@@ -32,6 +32,7 @@ export interface SignalMarker {
 }
 
 export interface MAPoint { time: number; value: number; }
+export interface HighlightTrade { entryTime: number; exitTime: number; direction: "long" | "short"; }
 
 interface Props {
   candles: Candle[];
@@ -39,9 +40,10 @@ interface Props {
   maLine?: MAPoint[];
   maLabel?: string;
   height?: number;
+  highlightTrade?: HighlightTrade | null;
 }
 
-export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", height = 500 }: Props) {
+export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", height = 500, highlightTrade }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -146,6 +148,15 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
 
     chart.timeScale().fitContent();
 
+    // Highlight selected trade
+    if (highlightTrade) {
+      const pad = 15 * 86400; // 15-day padding in seconds
+      chartRef.current?.timeScale().setVisibleRange({
+        from: (Math.floor(highlightTrade.entryTime / 1000) - pad) as Time,
+        to:   (Math.floor(highlightTrade.exitTime  / 1000) + pad) as Time,
+      });
+    }
+
     // Resize observer
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
@@ -162,6 +173,16 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       chart.remove();
     };
   }, [candles, signals, height]);
+
+  // Zoom to highlighted trade without re-building the chart
+  useEffect(() => {
+    if (!highlightTrade || !chartRef.current) return;
+    const pad = 15 * 86400;
+    chartRef.current.timeScale().setVisibleRange({
+      from: (Math.floor(highlightTrade.entryTime / 1000) - pad) as Time,
+      to:   (Math.floor(highlightTrade.exitTime  / 1000) + pad) as Time,
+    });
+  }, [highlightTrade]);
 
   return (
     <div

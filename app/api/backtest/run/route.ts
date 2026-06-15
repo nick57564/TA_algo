@@ -289,12 +289,10 @@ function runEngine(bars: Bar[], ma: number[]) {
     const side    = aboveMA ? "bullish" : "bearish";
     const dir     = aboveMA ? "long"    : "short";
 
-    // Filter 1: MA must be sloping in trade direction
+    // MA slope — used as bonus confirmation, not a hard gate
     const maSlope = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
-    if (dir === "long"  && maSlope <= 0) continue;
-    if (dir === "short" && maSlope >= 0) continue;
 
-    // Filter 2: price must not be overextended from MA
+    // Hard filter: price must not be overextended from MA
     const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
     if (distFromMA > MAX_DIST_MA) continue;
 
