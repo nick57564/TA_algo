@@ -88,18 +88,18 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
       const [a, b] = pHigh.slice(-2);
       const sim = Math.abs(a.price - b.price) / a.price;
       // Peaks must be at least 5 bars apart to avoid detecting same move twice
-      if (sim < 0.015 && Math.abs(a.idx - b.idx) >= 5) {
+      if (sim < 0.02 && Math.abs(a.idx - b.idx) >= 5) {
         const neck = Math.min(...win.slice(a.idx, b.idx + 1).map(w => w.low));
-        if (close < neck * 0.99) return { name: "📉 Double Top — two equal peaks, neckline broken", engulfing: bearEngulf };
+        if (close < neck * 0.995) return { name: "📉 Double Top — two equal peaks, neckline broken", engulfing: bearEngulf };
       }
     }
     // ── Triple Top ──────────────────────────────────────────────────────────
     if (pHigh.length >= 3) {
       const [a, b, c] = pHigh.slice(-3);
       const avg = (a.price + b.price + c.price) / 3;
-      if (Math.abs(a.price - avg) / avg < 0.02 && Math.abs(c.price - avg) / avg < 0.02) {
+      if (Math.abs(a.price - avg) / avg < 0.025 && Math.abs(c.price - avg) / avg < 0.025) {
         const neck = Math.min(...win.slice(a.idx, c.idx + 1).map(w => w.low));
-        if (close < neck * 0.99) return { name: "📉 Triple Top — three failed attempts at resistance, breakdown confirmed", engulfing: bearEngulf };
+        if (close < neck * 0.995) return { name: "📉 Triple Top — three failed attempts at resistance, breakdown confirmed", engulfing: bearEngulf };
       }
     }
     // ── Head & Shoulders (tighter shoulder match 3%) ─────────────────────────
@@ -108,9 +108,9 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
       const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
       // Head must be meaningfully higher than both shoulders
       const headLift = Math.min(head.price - ls.price, head.price - rs.price) / ls.price;
-      if (headLift > 0.02 && shoulderSim < 0.03) {
+      if (headLift > 0.015 && shoulderSim < 0.04) {
         const neck = Math.max(win[ls.idx].low, win[rs.idx].low);
-        if (close < neck * 0.99) return { name: "📉 Head & Shoulders — classic reversal, neckline broken", engulfing: bearEngulf };
+        if (close < neck * 0.995) return { name: "📉 Head & Shoulders — classic reversal, neckline broken", engulfing: bearEngulf };
       }
     }
   }
@@ -120,18 +120,18 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
     if (pLow.length >= 2) {
       const [a, b] = pLow.slice(-2);
       const sim = Math.abs(a.price - b.price) / a.price;
-      if (sim < 0.015 && Math.abs(a.idx - b.idx) >= 5) {
+      if (sim < 0.02 && Math.abs(a.idx - b.idx) >= 5) {
         const neck = Math.max(...win.slice(a.idx, b.idx + 1).map(w => w.high));
-        if (close > neck * 1.01) return { name: "📈 Double Bottom — two equal lows, neckline broken", engulfing: bullEngulf };
+        if (close > neck * 1.005) return { name: "📈 Double Bottom — two equal lows, neckline broken", engulfing: bullEngulf };
       }
     }
     // ── Triple Bottom ───────────────────────────────────────────────────────
     if (pLow.length >= 3) {
       const [a, b, c] = pLow.slice(-3);
       const avg = (a.price + b.price + c.price) / 3;
-      if (Math.abs(a.price - avg) / avg < 0.02 && Math.abs(c.price - avg) / avg < 0.02) {
+      if (Math.abs(a.price - avg) / avg < 0.025 && Math.abs(c.price - avg) / avg < 0.025) {
         const neck = Math.max(...win.slice(a.idx, c.idx + 1).map(w => w.high));
-        if (close > neck * 1.01) return { name: "📈 Triple Bottom — three bounces from support, breakout confirmed", engulfing: bullEngulf };
+        if (close > neck * 1.005) return { name: "📈 Triple Bottom — three bounces from support, breakout confirmed", engulfing: bullEngulf };
       }
     }
     // ── Inverted H&S (head must be meaningfully lower than shoulders) ────────
@@ -139,12 +139,14 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
       const [ls, head, rs] = pLow.slice(-3);
       const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
       const headDip = Math.min(ls.price - head.price, rs.price - head.price) / ls.price;
-      if (headDip > 0.02 && shoulderSim < 0.03) {
+      if (headDip > 0.015 && shoulderSim < 0.04) {
         const neck = Math.min(win[ls.idx].high, win[rs.idx].high);
-        if (close > neck * 1.01) return { name: "📈 Inverted H&S — classic reversal, neckline broken", engulfing: bullEngulf };
+        if (close > neck * 1.005) return { name: "📈 Inverted H&S — classic reversal, neckline broken", engulfing: bullEngulf };
       }
     }
-  }
+  // ── Engulfing as primary trigger (requires 1 extra confirmation later) ───────
+  if (side === "bearish" && bearEngulf) return { name: "📉 Bearish Engulfing — red candle fully swallowed the previous green candle", engulfing: true };
+  if (side === "bullish" && bullEngulf) return { name: "📈 Bullish Engulfing — green candle fully swallowed the previous red candle", engulfing: true };
 
   return null;
 }
@@ -236,7 +238,7 @@ function runEngine(bars: Bar[], ma: number[]) {
   const ATR_SL_MULT = 1.5;    // SL = 1.5× ATR (adapts to actual volatility)
   const RR          = 3;      // 3:1 reward-to-risk
   const CAP         = 10_000;
-  const COOLDOWN    = 3;      // bars to wait after a loss before new entry
+  const COOLDOWN    = 1;      // bars to wait after a loss before new entry
   const MAX_DIST_MA = 0.12;   // skip if price >12% from 200 MA (overextended)
   const MA_SLOPE_N  = 10;     // bars to measure MA slope over
 
@@ -309,8 +311,8 @@ function runEngine(bars: Bar[], ma: number[]) {
     if (slopePct > 0.5)                  confirmations.push(`MA slope ${slopePct.toFixed(1)}%/10d`);
     if (patternResult.engulfing)         confirmations.push(dir === "long" ? "bullish engulfing on breakout" : "bearish engulfing on breakdown");
 
-    // Require at least 2 confirmations (pattern alone is not enough)
-    if (confirmations.length < 2) continue;
+    // Require at least 1 confirmation beyond the pattern + MA position
+    if (confirmations.length < 1) continue;
 
     // ATR-based SL/TP (adapts to current volatility)
     const barAtr  = atr(bars, i);
