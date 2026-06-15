@@ -70,11 +70,13 @@ function pivots(bars: Bar[], type: "high" | "low", n = 3): { price: number; idx:
 // Returns { name, engulfing } where engulfing is a bonus confirmation flag
 function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { name: string; engulfing: boolean } | null {
   if (i < 20) return null;
-  const win    = bars.slice(i - 50, i + 1);
-  const offset = i - 50 < 0 ? i : 50;
+  const win    = bars.slice(i - 60, i + 1);
+  const offset = i - 60 < 0 ? i : 60;
 
-  const pHigh = pivots(win, "high", 3).filter(p => p.idx < offset);
-  const pLow  = pivots(win, "low",  3).filter(p => p.idx < offset);
+  // n=2: only needs 2 bars on each side to confirm a local high/low
+  // catches tighter H&S patterns like the Jan 2026 one
+  const pHigh = pivots(win, "high", 2).filter(p => p.idx < offset);
+  const pLow  = pivots(win, "low",  2).filter(p => p.idx < offset);
   const close = bars[i].close;
 
   // Check engulfing on this bar (used as bonus, not standalone trigger)
