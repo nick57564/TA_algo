@@ -142,6 +142,7 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
         }
       }
     }
+  } // end if (side === "bearish")
 
   if (side === "bullish") {
     // ── Double Bottom (tighter 1.5% tolerance, require 1% neckline break) ───
