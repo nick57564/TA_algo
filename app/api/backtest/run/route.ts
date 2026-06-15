@@ -104,18 +104,44 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
         if (close < neck * 0.995) return { name: "📉 Triple Top — three failed attempts at resistance, breakdown confirmed", engulfing: bearEngulf };
       }
     }
-    // ── Head & Shoulders (tighter shoulder match 3%) ─────────────────────────
-    if (pHigh.length >= 3) {
-      const [ls, head, rs] = pHigh.slice(-3);
-      const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
-      // Head must be meaningfully higher than both shoulders
-      const headLift = Math.min(head.price - ls.price, head.price - rs.price) / ls.price;
-      if (headLift > 0.015 && shoulderSim < 0.04) {
-        const neck = Math.max(win[ls.idx].low, win[rs.idx].low);
-        if (close < neck * 0.995) return { name: "📉 Head & Shoulders — classic reversal, neckline broken", engulfing: bearEngulf };
+    // ── Head & Shoulders — visual approach ──────────────────────────────────
+    // Iterate every pivot high as a candidate HEAD, look for LS before and RS after
+    {
+      let found = false;
+      for (let pi = pHigh.length - 1; pi >= 1 && !found; pi--) {
+        const head = pHigh[pi];
+        // Left shoulder: the highest pivot strictly before head
+        // LS = most recent pivot before head that is at least 2% below the head
+        const lsCandidates = pHigh.filter(p => p.idx < head.idx && (head.price - p.price) / head.price >= 0.02);
+        if (lsCandidates.length === 0) continue;
+        const ls = lsCandidates[lsCandidates.length - 1]; // most recent, not highest
+        // Right shoulder: find the trough after head, then the highest point after that trough
+        // This skips the immediate high right beside the head and finds the visual RS
+        const afterHead = win.slice(head.idx + 1);
+        if (afterHead.length < 3) continue;
+        // Trough = index of the lowest close after the head
+        const troughRelIdx = afterHead.reduce((minI, b, i) => b.close < afterHead[minI].close ? i : minI, 0);
+        if (troughRelIdx >= afterHead.length - 1) continue;
+        // RS = highest high after the trough
+        const afterTrough = afterHead.slice(troughRelIdx + 1);
+        if (afterTrough.length === 0) continue;
+        const rsPrice  = Math.max(...afterTrough.map(b => b.high));
+        const rsRelIdx = head.idx + 1 + troughRelIdx + 1 + afterTrough.findIndex(b => b.high === rsPrice);
+        const rsIdx    = rsRelIdx;
+        // Conditions
+        const headLift    = Math.min(head.price - ls.price, head.price - rsPrice) / head.price;
+        const shoulderSim = Math.abs(ls.price - rsPrice) / ls.price;
+        if (headLift > 0.015 && shoulderSim < 0.06 && rsPrice < head.price) {
+          const neckL = Math.min(...win.slice(ls.idx, head.idx + 1).map(b => b.low));
+          const neckR = Math.min(...win.slice(head.idx, rsIdx + 1).map(b => b.low));
+          const neck  = Math.max(neckL, neckR);
+          if (close < neck * 0.995) {
+            found = true;
+            return { name: "📉 Head & Shoulders — left shoulder, head, right shoulder formed; neckline broken", engulfing: bearEngulf };
+          }
+        }
       }
     }
-  }
 
   if (side === "bullish") {
     // ── Double Bottom (tighter 1.5% tolerance, require 1% neckline break) ───
