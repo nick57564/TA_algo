@@ -144,6 +144,8 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
         if (close > neck * 1.005) return { name: "📈 Inverted H&S — classic reversal, neckline broken", engulfing: bullEngulf };
       }
     }
+  }
+
   // ── Engulfing as primary trigger (requires 1 extra confirmation later) ───────
   if (side === "bearish" && bearEngulf) return { name: "📉 Bearish Engulfing — red candle fully swallowed the previous green candle", engulfing: true };
   if (side === "bullish" && bullEngulf) return { name: "📈 Bullish Engulfing — green candle fully swallowed the previous red candle", engulfing: true };
