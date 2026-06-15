@@ -226,7 +226,7 @@ function analyse(
   ma: number[], bars: Bar[]
 ): string {
   if (exitReason === "eod") return "Still open at end of data.";
-  if (exitReason === "be")  return "✅ Breakeven exit — stop was trailed to entry after price moved 1R in our favour. Protected capital, no loss.";
+  if (exitReason === "be")  return "✅ Trailing stop exit — stop locked in +0.5R profit after price moved 1R in our favour. Small win, capital protected.";
 
   // ── Context signals ──────────────────────────────────────────────────────
   const maAtEntry  = ma[entryIdx];
@@ -307,10 +307,11 @@ function atr(bars: Bar[], idx: number, n = 10): number {
 function runEngine(bars: Bar[], ma: number[]) {
   const RISK        = 0.01;   // 1% risk per trade
   const ATR_SL_MULT = 1.5;    // SL = 1.5× ATR
-  const RR          = 3;      // 3:1 reward-to-risk
+  const RR          = 2;      // 2:1 reward-to-risk (closer TP = more hits)
   const CAP         = 10_000;
   const MAX_DIST_MA = 0.10;   // skip if price >10% from 200 MA
   const MA_SLOPE_N  = 10;
+  const TRAIL_LOCK  = 0.5;    // trail SL to +0.5R profit (not just breakeven)
 
   const trades: Trade[]   = [];
   const signals: object[] = [];
@@ -330,11 +331,11 @@ function runEngine(bars: Bar[], ma: number[]) {
           ? bar.high - open.entryPrice
           : open.entryPrice - bar.low;
         if (favMove >= open.slDist) {
-          // Lock in breakeven (+tiny buffer so spread doesn't stop us)
-          const buf = open.entryPrice * 0.001;
+          // Lock in +0.5R profit (not just breakeven) so "BE" trades still earn
+          const lockIn = open.slDist * TRAIL_LOCK;
           open.slPrice = open.direction === "long"
-            ? open.entryPrice + buf
-            : open.entryPrice - buf;
+            ? open.entryPrice + lockIn
+            : open.entryPrice - lockIn;
           open.trailedToBreakeven = true;
         }
       }
@@ -390,7 +391,7 @@ function runEngine(bars: Bar[], ma: number[]) {
     if (slopePct > 0.3)                  confirmations.push(`MA slope ${slopePct.toFixed(1)}%`);
     if (patternResult.engulfing)         confirmations.push("engulf confirm");
 
-    if (confirmations.length < 1) continue;
+    if (confirmations.length < 2) continue;
 
     const barAtr  = atr(bars, i);
     const slDist  = barAtr * ATR_SL_MULT;
