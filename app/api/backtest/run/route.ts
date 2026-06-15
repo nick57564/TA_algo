@@ -67,83 +67,83 @@ function pivots(bars: Bar[], type: "high" | "low", n = 3): { price: number; idx:
 }
 
 // ── Pattern detection at bar `i` ─────────────────────────────────────────────
-function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): string | null {
+// Returns { name, engulfing } where engulfing is a bonus confirmation flag
+function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { name: string; engulfing: boolean } | null {
   if (i < 20) return null;
-  const win    = bars.slice(i - 40, i + 1);  // look-back window
-  const offset = i - 40 < 0 ? i : 40;        // index of current bar inside `win`
+  const win    = bars.slice(i - 50, i + 1);
+  const offset = i - 50 < 0 ? i : 50;
 
   const pHigh = pivots(win, "high", 3).filter(p => p.idx < offset);
   const pLow  = pivots(win, "low",  3).filter(p => p.idx < offset);
   const close = bars[i].close;
 
+  // Check engulfing on this bar (used as bonus, not standalone trigger)
+  const prev = bars[i - 1];
+  const bearEngulf = prev.close > prev.open && bars[i].open > prev.close && close < prev.open;
+  const bullEngulf = prev.close < prev.open && bars[i].open < prev.close && close > prev.open;
+
   if (side === "bearish") {
-    // ── Double Top ──────────────────────────────────────────────────────────
+    // ── Double Top (tighter 1.5% tolerance, require 1% neckline break) ──────
     if (pHigh.length >= 2) {
       const [a, b] = pHigh.slice(-2);
       const sim = Math.abs(a.price - b.price) / a.price;
-      if (sim < 0.025) {
+      // Peaks must be at least 5 bars apart to avoid detecting same move twice
+      if (sim < 0.015 && Math.abs(a.idx - b.idx) >= 5) {
         const neck = Math.min(...win.slice(a.idx, b.idx + 1).map(w => w.low));
-        if (close < neck) return "📉 Double Top — price tested resistance twice and broke down";
+        if (close < neck * 0.99) return { name: "📉 Double Top — two equal peaks, neckline broken", engulfing: bearEngulf };
       }
     }
     // ── Triple Top ──────────────────────────────────────────────────────────
     if (pHigh.length >= 3) {
       const [a, b, c] = pHigh.slice(-3);
       const avg = (a.price + b.price + c.price) / 3;
-      if (Math.abs(a.price - avg) / avg < 0.03 && Math.abs(c.price - avg) / avg < 0.03) {
+      if (Math.abs(a.price - avg) / avg < 0.02 && Math.abs(c.price - avg) / avg < 0.02) {
         const neck = Math.min(...win.slice(a.idx, c.idx + 1).map(w => w.low));
-        if (close < neck) return "📉 Triple Top — three failed attempts at resistance, breakdown confirmed";
+        if (close < neck * 0.99) return { name: "📉 Triple Top — three failed attempts at resistance, breakdown confirmed", engulfing: bearEngulf };
       }
     }
-    // ── Head & Shoulders ────────────────────────────────────────────────────
+    // ── Head & Shoulders (tighter shoulder match 3%) ─────────────────────────
     if (pHigh.length >= 3) {
       const [ls, head, rs] = pHigh.slice(-3);
       const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
-      if (head.price > ls.price && head.price > rs.price && shoulderSim < 0.04) {
-        const neckL = win[ls.idx].low, neckR = win[rs.idx].low;
-        const neck  = Math.max(neckL, neckR);
-        if (close < neck) return "📉 Head & Shoulders — classic reversal: left shoulder → head → right shoulder, neckline broken";
+      // Head must be meaningfully higher than both shoulders
+      const headLift = Math.min(head.price - ls.price, head.price - rs.price) / ls.price;
+      if (headLift > 0.02 && shoulderSim < 0.03) {
+        const neck = Math.max(win[ls.idx].low, win[rs.idx].low);
+        if (close < neck * 0.99) return { name: "📉 Head & Shoulders — classic reversal, neckline broken", engulfing: bearEngulf };
       }
     }
-    // ── Bearish Engulfing ───────────────────────────────────────────────────
-    const prev = bars[i - 1];
-    if (prev.close > prev.open && close < bars[i].open && close < prev.open && bars[i].open > prev.close)
-      return "📉 Bearish Engulfing — red candle fully swallowed the previous green candle";
   }
 
   if (side === "bullish") {
-    // ── Double Bottom ───────────────────────────────────────────────────────
+    // ── Double Bottom (tighter 1.5% tolerance, require 1% neckline break) ───
     if (pLow.length >= 2) {
       const [a, b] = pLow.slice(-2);
       const sim = Math.abs(a.price - b.price) / a.price;
-      if (sim < 0.025) {
+      if (sim < 0.015 && Math.abs(a.idx - b.idx) >= 5) {
         const neck = Math.max(...win.slice(a.idx, b.idx + 1).map(w => w.high));
-        if (close > neck) return "📈 Double Bottom — price found support twice and broke out";
+        if (close > neck * 1.01) return { name: "📈 Double Bottom — two equal lows, neckline broken", engulfing: bullEngulf };
       }
     }
     // ── Triple Bottom ───────────────────────────────────────────────────────
     if (pLow.length >= 3) {
       const [a, b, c] = pLow.slice(-3);
       const avg = (a.price + b.price + c.price) / 3;
-      if (Math.abs(a.price - avg) / avg < 0.03 && Math.abs(c.price - avg) / avg < 0.03) {
+      if (Math.abs(a.price - avg) / avg < 0.02 && Math.abs(c.price - avg) / avg < 0.02) {
         const neck = Math.max(...win.slice(a.idx, c.idx + 1).map(w => w.high));
-        if (close > neck) return "📈 Triple Bottom — three bounces from support, breakout confirmed";
+        if (close > neck * 1.01) return { name: "📈 Triple Bottom — three bounces from support, breakout confirmed", engulfing: bullEngulf };
       }
     }
-    // ── Inverted Head & Shoulders ────────────────────────────────────────────
+    // ── Inverted H&S (head must be meaningfully lower than shoulders) ────────
     if (pLow.length >= 3) {
       const [ls, head, rs] = pLow.slice(-3);
       const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
-      if (head.price < ls.price && head.price < rs.price && shoulderSim < 0.04) {
-        const neckL = win[ls.idx].high, neckR = win[rs.idx].high;
-        const neck  = Math.min(neckL, neckR);
-        if (close > neck) return "📈 Inverted Head & Shoulders — reversal: left shoulder → head → right shoulder, neckline broken";
+      const headDip = Math.min(ls.price - head.price, rs.price - head.price) / ls.price;
+      if (headDip > 0.02 && shoulderSim < 0.03) {
+        const neck = Math.min(win[ls.idx].high, win[rs.idx].high);
+        if (close > neck * 1.01) return { name: "📈 Inverted H&S — classic reversal, neckline broken", engulfing: bullEngulf };
       }
     }
-    // ── Bullish Engulfing ───────────────────────────────────────────────────
-    const prev = bars[i - 1];
-    if (prev.close < prev.open && close > bars[i].open && close > prev.open && bars[i].open < prev.close)
-      return "📈 Bullish Engulfing — green candle fully swallowed the previous red candle";
   }
 
   return null;
@@ -247,7 +247,8 @@ function runEngine(bars: Bar[], ma: number[]) {
   let lossStreak = 0;
   let cooldown   = 0;         // bars remaining in cooldown
 
-  for (let i = 10; i < bars.length; i++) {
+  // Start after full 200-bar warmup so the 200 SMA is meaningful
+  for (let i = 205; i < bars.length; i++) {
     const bar = bars[i];
     if (cooldown > 0) cooldown--;
 
@@ -293,28 +294,23 @@ function runEngine(bars: Bar[], ma: number[]) {
     const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
     if (distFromMA > MAX_DIST_MA) continue;
 
-    const pattern = detectPattern(bars, i, side);
-    if (!pattern) continue;
+    const patternResult = detectPattern(bars, i, side);
+    if (!patternResult) continue;
 
-    // ── Confluence scoring (need 2+ confirmations besides the pattern) ────────
+    // ── Confluence scoring — need at least 2 of these 4 to confirm ───────────
     const barRsi   = rsi(bars, i);
     const volRatio = volumeRatio(bars, i);
+    const slopePct = Math.abs(maSlope) / ma[Math.max(0, i - MA_SLOPE_N)] * 100;
 
     const confirmations: string[] = [];
+    if (dir === "long"  && barRsi < 60)  confirmations.push(`RSI ${barRsi.toFixed(0)} — room to run`);
+    if (dir === "short" && barRsi > 40)  confirmations.push(`RSI ${barRsi.toFixed(0)} — room to fall`);
+    if (volRatio >= 1.2)                 confirmations.push(`volume ${volRatio.toFixed(1)}× avg`);
+    if (slopePct > 0.5)                  confirmations.push(`MA slope ${slopePct.toFixed(1)}%/10d`);
+    if (patternResult.engulfing)         confirmations.push(dir === "long" ? "bullish engulfing on breakout" : "bearish engulfing on breakdown");
 
-    // RSI confirmation
-    if (dir === "long"  && barRsi < 60) confirmations.push(`RSI ${barRsi.toFixed(0)} (not overbought)`);
-    if (dir === "short" && barRsi > 40) confirmations.push(`RSI ${barRsi.toFixed(0)} (not oversold)`);
-
-    // Volume spike confirmation
-    if (volRatio >= 1.2) confirmations.push(`volume ${volRatio.toFixed(1)}× avg (strong interest)`);
-
-    // MA slope strength (steep slope = strong trend)
-    const slopePct = Math.abs(maSlope) / ma[Math.max(0, i - MA_SLOPE_N)] * 100;
-    if (slopePct > 0.5) confirmations.push(`MA trending strongly (${slopePct.toFixed(1)}%/10d)`);
-
-    // Require at least 1 extra confirmation beyond the pattern + MA position
-    if (confirmations.length === 0) continue;
+    // Require at least 2 confirmations (pattern alone is not enough)
+    if (confirmations.length < 2) continue;
 
     // ATR-based SL/TP (adapts to current volatility)
     const barAtr  = atr(bars, i);
@@ -325,12 +321,12 @@ function runEngine(bars: Bar[], ma: number[]) {
     if (size <= 0) continue;
 
     const slPct   = (slDist / bar.close * 100).toFixed(1);
-    const maLabel = `200 MA @ $${ma[i].toFixed(0)} (slope ${maSlope > 0 ? "↑" : "↓"})`;
+    const maLabel = `200 MA @ $${ma[i].toFixed(0)} (${maSlope > 0 ? "↑ rising" : "↓ falling"})`;
     open = {
       direction: dir, entryTime: bar.time, exitTime: 0,
       entryPrice: bar.close, exitPrice: 0, slPrice, tpPrice, size,
       pnl: 0, exitReason: "eod", entryIdx: i,
-      entryReason: `${pattern} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}%`,
+      entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}%`,
       analysis: "",
     };
     signals.push({ timestamp: new Date(bar.time).toISOString(), direction: dir, type: "Entry", price: bar.close });
