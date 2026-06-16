@@ -114,19 +114,16 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
         const lsCandidates = pHigh.filter(p => p.idx < head.idx && (head.price - p.price) / head.price >= 0.02);
         if (lsCandidates.length === 0) continue;
         const ls = lsCandidates[lsCandidates.length - 1]; // most recent, not highest
-        // Right shoulder: find the trough after head, then the highest point after that trough
-        // This skips the immediate high right beside the head and finds the visual RS
-        const afterHead = win.slice(head.idx + 1);
-        if (afterHead.length < 3) continue;
-        // Trough = index of the lowest close after the head
-        const troughRelIdx = afterHead.reduce((minI, b, i) => b.close < afterHead[minI].close ? i : minI, 0);
-        if (troughRelIdx >= afterHead.length - 1) continue;
-        // RS = highest high after the trough
-        const afterTrough = afterHead.slice(troughRelIdx + 1);
-        if (afterTrough.length === 0) continue;
-        const rsPrice  = Math.max(...afterTrough.map(b => b.high));
-        const rsRelIdx = head.idx + 1 + troughRelIdx + 1 + afterTrough.findIndex(b => b.high === rsPrice);
-        const rsIdx    = rsRelIdx;
+        // Right shoulder = the most recent CONFIRMED pivot high after the head that
+        // is below it. Using a pivot (locked in 2 bars after it forms) instead of a
+        // running-low trough means a clean breakdown — where the breakdown bar is
+        // itself the new low — no longer blocks detection. That blind spot was why
+        // steady declines (e.g. the January top) were never flagged as an H&S.
+        const rsCand = pHigh.filter(p => p.idx > head.idx && p.price < head.price);
+        if (rsCand.length === 0) continue;
+        const rs = rsCand[rsCand.length - 1];
+        const rsPrice = rs.price;
+        const rsIdx   = rs.idx;
         // Conditions
         const headLift    = Math.min(head.price - ls.price, head.price - rsPrice) / head.price;
         const shoulderSim = Math.abs(ls.price - rsPrice) / ls.price;
