@@ -49,6 +49,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const overlayRef   = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HighlightTrade | null>(null);
+  const updateOverlayFnRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || !candles.length) return;
@@ -164,36 +165,37 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       const trade = highlightRef.current;
       const ov = overlayRef.current;
       if (!ov) return;
-      if (!trade || !chartRef.current) { ov.style.display = "none"; return; }
+      if (!trade || !chartRef.current) { ov.style.opacity = "0"; return; }
       const ts = chartRef.current.timeScale();
       const x1 = ts.timeToCoordinate(Math.floor(trade.entryTime / 1000) as Time);
       const x2 = ts.timeToCoordinate(Math.floor(trade.exitTime  / 1000) as Time);
-      if (x1 === null || x2 === null) { ov.style.display = "none"; return; }
+      if (x1 === null || x2 === null) { ov.style.opacity = "0"; return; }
       const left  = Math.min(x1, x2);
-      const width = Math.max(Math.abs(x2 - x1), 2);
-      ov.style.display = "block";
+      const width = Math.max(Math.abs(x2 - x1), 3);
+      ov.style.opacity = "1";
       ov.style.left  = `${left}px`;
       ov.style.width = `${width}px`;
     };
+    const onRangeChange = () => requestAnimationFrame(updateOverlay);
     updateOverlay();
-    chart.timeScale().subscribeVisibleTimeRangeChange(updateOverlay);
+    chart.timeScale().subscribeVisibleTimeRangeChange(onRangeChange);
 
     // Resize observer
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth });
-        updateOverlay();
+        requestAnimationFrame(updateOverlay);
       }
     });
     ro.observe(containerRef.current);
 
-    chartRef.current  = chart;
-    seriesRef.current = series;
-    (chartRef.current as unknown as { _updateOverlay?: () => void })._updateOverlay = updateOverlay;
+    chartRef.current      = chart;
+    seriesRef.current     = series;
+    updateOverlayFnRef.current = updateOverlay;
 
     return () => {
       ro.disconnect();
-      chart.timeScale().unsubscribeVisibleTimeRangeChange(updateOverlay);
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(onRangeChange);
       chart.remove();
     };
   }, [candles, signals, height]);
@@ -209,11 +211,13 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
         to:   (Math.floor(highlightTrade.exitTime  / 1000) + pad) as Time,
       });
     }
-    (chartRef.current as unknown as { _updateOverlay?: () => void })._updateOverlay?.();
+    // setVisibleRange needs a frame to apply before coordinates are valid
+    requestAnimationFrame(() => updateOverlayFnRef.current?.());
+    requestAnimationFrame(() => requestAnimationFrame(() => updateOverlayFnRef.current?.()));
   }, [highlightTrade]);
 
   return (
-    <div style={{ position: "relative", width: "100%", height }}>
+    <div style={{ position: "relative", width: "100%", height, overflow: "hidden", borderRadius: 8 }}>
       <div
         ref={containerRef}
         style={{ width: "100%", height, borderRadius: 8, overflow: "hidden" }}
@@ -221,21 +225,22 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       <div
         ref={overlayRef}
         style={{
-          display: "none",
+          opacity: 0,
           position: "absolute",
           top: 0,
           bottom: 0,
           pointerEvents: "none",
-          background: "rgba(239,68,68,.10)",
-          border: "2px solid rgba(239,68,68,.85)",
-          borderRadius: 4,
+          background: "rgba(239,68,68,.22)",
+          borderLeft: "3px solid #ef4444",
+          borderRight: "3px solid #ef4444",
+          transition: "opacity .15s",
           animation: "chartTradeGlow 1.4s ease-in-out infinite",
         }}
       />
       <style>{`
         @keyframes chartTradeGlow {
-          0%, 100% { box-shadow: 0 0 14px rgba(239,68,68,.5), inset 0 0 18px rgba(239,68,68,.12); }
-          50%      { box-shadow: 0 0 32px rgba(239,68,68,.9), inset 0 0 28px rgba(239,68,68,.28); }
+          0%, 100% { box-shadow: inset 0 0 22px rgba(239,68,68,.35); background: rgba(239,68,68,.18); }
+          50%      { box-shadow: inset 0 0 40px rgba(239,68,68,.6);  background: rgba(239,68,68,.30); }
         }
       `}</style>
     </div>
