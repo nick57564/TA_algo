@@ -48,9 +48,13 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
                     setExpanded(open ? null : i);
                     onSelect(selected ? null : i, selected ? null : t);
                   }}
+                  className={selected ? "trade-row-glow" : undefined}
                   style={{ borderBottom: open ? "none" : "1px solid var(--border)", cursor: "pointer",
-                    background: selected ? "rgba(59,130,246,.1)" : open ? "rgba(59,130,246,.04)" : "transparent",
-                    outline: selected ? "1px solid rgba(59,130,246,.4)" : "none",
+                    background: selected ? "rgba(239,68,68,.14)" : open ? "rgba(59,130,246,.04)" : "transparent",
+                    outline: selected ? "2px solid rgba(239,68,68,.8)" : "none",
+                    outlineOffset: selected ? -1 : 0,
+                    boxShadow: selected ? "0 0 16px rgba(239,68,68,.55), inset 0 0 12px rgba(239,68,68,.15)" : "none",
+                    position: "relative",
                   }}>
                   <td style={{ padding: "9px 8px 9px 14px", color: "var(--muted)", fontSize: 10 }}>{open ? "▼" : "▶"}</td>
                   <td style={{ padding: "9px 6px", color: "var(--muted)" }}>{i + 1}</td>
@@ -390,6 +394,11 @@ export default function BacktestPage() {
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes tradeGlow {
+          0%, 100% { box-shadow: 0 0 10px rgba(239,68,68,.4), inset 0 0 8px rgba(239,68,68,.1); }
+          50%      { box-shadow: 0 0 24px rgba(239,68,68,.85), inset 0 0 16px rgba(239,68,68,.25); }
+        }
+        .trade-row-glow td { animation: tradeGlow 1.4s ease-in-out infinite; }
       `}</style>
     </div>
   );
