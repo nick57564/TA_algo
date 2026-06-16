@@ -232,7 +232,7 @@ function analyse(
   ma: number[], bars: Bar[]
 ): string {
   if (exitReason === "eod") return "Still open at end of data.";
-  if (exitReason === "be")  return "✅ Trailing stop exit — stop locked in +0.5R profit after price moved 1R in our favour. Small win, capital protected.";
+  if (exitReason === "be")  return "✅ Trailing stop exit — stop followed price after it moved 1R in our favour, then price reversed and tagged the trailed stop. Profit locked in along the way, but the move reversed before the final target.";
 
   // ── Context signals ──────────────────────────────────────────────────────
   const maAtEntry  = ma[entryIdx];
@@ -290,6 +290,7 @@ interface Trade {
   pnl: number; size: number;
   slDist: number;          // original SL distance (used for trailing)
   trailedToBreakeven: boolean;
+  extremePrice: number;    // best price reached since entry (for continuous trailing)
   exitReason: "tp" | "sl" | "be" | "eod";
   entryReason: string; analysis: string;
   entryIdx: number;
@@ -318,7 +319,6 @@ function runEngine(bars: Bar[], ma: number[]) {
   const MAX_DIST_MA = 0.10;   // skip if price >10% from 200 MA (candle patterns)
   const MAX_DIST_MA_STRUCTURE = 0.18; // structure patterns (H&S/Double/Triple) get a higher cap, not unlimited
   const MA_SLOPE_N  = 10;
-  const TRAIL_LOCK  = 0.5;    // trail SL to +0.5R profit (not just breakeven)
 
   const trades: Trade[]   = [];
   const signals: object[] = [];
@@ -332,19 +332,29 @@ function runEngine(bars: Bar[], ma: number[]) {
 
     // ── manage open trade ──
     if (open) {
-      // Trail SL to breakeven once price moves 1R in our favour
-      if (!open.trailedToBreakeven) {
-        const favMove = open.direction === "long"
-          ? bar.high - open.entryPrice
-          : open.entryPrice - bar.low;
-        if (favMove >= open.slDist) {
-          // Lock in +0.5R profit (not just breakeven) so "BE" trades still earn
-          const lockIn = open.slDist * TRAIL_LOCK;
-          open.slPrice = open.direction === "long"
-            ? open.entryPrice + lockIn
-            : open.entryPrice - lockIn;
-          open.trailedToBreakeven = true;
-        }
+      // Track the best price reached since entry so the stop can keep trailing
+      // behind momentum instead of locking in one fixed level and sitting still.
+      open.extremePrice = open.direction === "long"
+        ? Math.max(open.extremePrice, bar.high)
+        : Math.min(open.extremePrice, bar.low);
+
+      const favMove = open.direction === "long"
+        ? open.extremePrice - open.entryPrice
+        : open.entryPrice - open.extremePrice;
+
+      if (favMove >= open.slDist) {
+        // Once price has moved 1R in our favour, trail the stop behind the
+        // running extreme at the same ATR distance used for the original SL —
+        // this rides continued momentum (e.g. a crash that keeps falling)
+        // instead of freezing at a fixed breakeven level. Stop only ever
+        // tightens, never loosens.
+        const trailStop = open.direction === "long"
+          ? open.extremePrice - open.slDist
+          : open.extremePrice + open.slDist;
+        open.slPrice = open.direction === "long"
+          ? Math.max(open.slPrice, trailStop)
+          : Math.min(open.slPrice, trailStop);
+        open.trailedToBreakeven = true;
       }
 
       let closed = false;
@@ -440,9 +450,9 @@ function runEngine(bars: Bar[], ma: number[]) {
     open = {
       direction: dir, entryTime, exitTime: 0,
       entryPrice, exitPrice: 0, slPrice, tpPrice,
-      slDist, trailedToBreakeven: false,
+      slDist, trailedToBreakeven: false, extremePrice: entryPrice,
       size, pnl: 0, exitReason: "eod", entryIdx: i + 1,
-      entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}% (trail to BE)`,
+      entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}% (trail by ATR)`,
       analysis: "",
     };
     signals.push({ timestamp: new Date(entryTime).toISOString(), direction: dir, type: "Entry", price: entryPrice });
