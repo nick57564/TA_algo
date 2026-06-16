@@ -291,6 +291,7 @@ interface Trade {
   slDist: number;          // original SL distance (used for trailing)
   trailedToBreakeven: boolean;
   extremePrice: number;    // best price reached since entry (for continuous trailing)
+  isStructure: boolean;    // H&S/Double/Triple — let the trailing stop ride past the measured-move target instead of capping there
   exitReason: "tp" | "sl" | "be" | "eod";
   entryReason: string; analysis: string;
   entryIdx: number;
@@ -357,13 +358,17 @@ function runEngine(bars: Bar[], ma: number[]) {
         open.trailedToBreakeven = true;
       }
 
+      // Structure trades (H&S/Double/Triple) don't cap out at the measured-move
+      // target — once price reaches it, let the trailing stop above keep riding
+      // the move instead of forcing an exit. Plain ATR trades keep the normal
+      // fixed TP since they have no "measured move" concept to extend beyond.
       let closed = false;
       if (open.direction === "long") {
         if (bar.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
-        if (bar.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
+        if (!open.isStructure && bar.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       } else {
         if (bar.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
-        if (bar.low  <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
+        if (!open.isStructure && bar.low <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       }
       if (closed) {
         open.exitTime = bar.time;
@@ -451,6 +456,7 @@ function runEngine(bars: Bar[], ma: number[]) {
       direction: dir, entryTime, exitTime: 0,
       entryPrice, exitPrice: 0, slPrice, tpPrice,
       slDist, trailedToBreakeven: false, extremePrice: entryPrice,
+      isStructure: patternResult.stop != null && patternResult.target != null,
       size, pnl: 0, exitReason: "eod", entryIdx: i + 1,
       entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}% (trail by ATR)`,
       analysis: "",
