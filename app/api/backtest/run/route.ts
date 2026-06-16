@@ -292,6 +292,7 @@ interface Trade {
   trailedToBreakeven: boolean;
   extremePrice: number;    // best price reached since entry (for continuous trailing)
   isStructure: boolean;    // H&S/Double/Triple — let the trailing stop ride past the measured-move target instead of capping there
+  targetReached: boolean;  // once the measured-move target is hit, trail tighter so we don't give back months of gains
   exitReason: "tp" | "sl" | "be" | "eod";
   entryReason: string; analysis: string;
   entryIdx: number;
@@ -343,15 +344,24 @@ function runEngine(bars: Bar[], ma: number[]) {
         ? open.extremePrice - open.entryPrice
         : open.entryPrice - open.extremePrice;
 
-      if (favMove >= open.slDist) {
-        // Once price has moved 1R in our favour, trail the stop behind the
-        // running extreme at the same ATR distance used for the original SL —
-        // this rides continued momentum (e.g. a crash that keeps falling)
-        // instead of freezing at a fixed breakeven level. Stop only ever
-        // tightens, never loosens.
+      // Once a structure trade reaches its measured-move target, switch to a
+      // much tighter trail (30% of the original distance) — it's allowed to
+      // keep riding the move, but it shouldn't be able to give back months of
+      // gains waiting for a full-width reversal before locking anything in.
+      if (open.isStructure && !open.targetReached) {
+        const tpHit = open.direction === "long" ? bar.high >= open.tpPrice : bar.low <= open.tpPrice;
+        if (tpHit) open.targetReached = true;
+      }
+      const trailDist = open.targetReached ? open.slDist * 0.3 : open.slDist;
+
+      if (favMove >= open.slDist || open.targetReached) {
+        // Once price has moved 1R in our favour (or hit the structure target),
+        // trail the stop behind the running extreme — this rides continued
+        // momentum (e.g. a crash that keeps falling) instead of freezing at a
+        // fixed breakeven level. Stop only ever tightens, never loosens.
         const trailStop = open.direction === "long"
-          ? open.extremePrice - open.slDist
-          : open.extremePrice + open.slDist;
+          ? open.extremePrice - trailDist
+          : open.extremePrice + trailDist;
         open.slPrice = open.direction === "long"
           ? Math.max(open.slPrice, trailStop)
           : Math.min(open.slPrice, trailStop);
@@ -457,6 +467,7 @@ function runEngine(bars: Bar[], ma: number[]) {
       entryPrice, exitPrice: 0, slPrice, tpPrice,
       slDist, trailedToBreakeven: false, extremePrice: entryPrice,
       isStructure: patternResult.stop != null && patternResult.target != null,
+      targetReached: false,
       size, pnl: 0, exitReason: "eod", entryIdx: i + 1,
       entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}% (trail by ATR)`,
       analysis: "",
