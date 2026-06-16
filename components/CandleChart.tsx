@@ -33,6 +33,7 @@ export interface SignalMarker {
 
 export interface MAPoint { time: number; value: number; }
 export interface HighlightTrade { entryTime: number; exitTime: number; direction: "long" | "short"; }
+export interface TradeRange { entryTime: number; exitTime: number; }
 
 interface Props {
   candles: Candle[];
@@ -41,15 +42,21 @@ interface Props {
   maLabel?: string;
   height?: number;
   highlightTrade?: HighlightTrade | null;
+  tradeRanges?: TradeRange[];
+  onTradeClick?: (idx: number) => void;
 }
 
-export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", height = 500, highlightTrade }: Props) {
+export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const overlayRef   = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HighlightTrade | null>(null);
   const updateOverlayFnRef = useRef<(() => void) | null>(null);
+  const tradeRangesRef = useRef<TradeRange[]>(tradeRanges);
+  const onTradeClickRef = useRef<((idx: number) => void) | undefined>(onTradeClick);
+  tradeRangesRef.current  = tradeRanges;
+  onTradeClickRef.current = onTradeClick;
 
   useEffect(() => {
     if (!containerRef.current || !candles.length) return;
@@ -180,6 +187,19 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
     updateOverlay();
     chart.timeScale().subscribeVisibleTimeRangeChange(onRangeChange);
 
+    // Click a candle that falls inside a trade's entry→exit window to select
+    // that trade in the table — the reverse of clicking a row to highlight the chart.
+    const onChartClick = (param: { time?: Time }) => {
+      if (param.time == null || !onTradeClickRef.current) return;
+      const clickedSec = param.time as number;
+      const ranges = tradeRangesRef.current;
+      const idx = ranges.findIndex(r =>
+        clickedSec >= Math.floor(r.entryTime / 1000) && clickedSec <= Math.floor(r.exitTime / 1000)
+      );
+      if (idx >= 0) onTradeClickRef.current(idx);
+    };
+    chart.subscribeClick(onChartClick);
+
     // Resize observer
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
@@ -196,6 +216,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
     return () => {
       ro.disconnect();
       chart.timeScale().unsubscribeVisibleTimeRangeChange(onRangeChange);
+      chart.unsubscribeClick(onChartClick);
       chart.remove();
     };
   }, [candles, signals, height]);

@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import StatCard from "@/components/StatCard";
 import type { BacktestResult } from "@/lib/types";
-import type { Candle, SignalMarker, MAPoint, HighlightTrade } from "@/components/CandleChart";
+import type { Candle, SignalMarker, MAPoint, HighlightTrade, TradeRange } from "@/components/CandleChart";
 
 const CandleChart = dynamic(() => import("@/components/CandleChart"), { ssr: false });
 
@@ -20,9 +20,16 @@ const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 function TradesTable({ trades, selectedIdx, onSelect }: {
   trades: import("@/lib/types").Trade[];
   selectedIdx: number | null;
-  onSelect: (idx: number | null, trade: import("@/lib/types").Trade | null) => void;
+  onSelect: (idx: number | null) => void;
 }) {
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+
+  // When selection comes from outside (e.g. clicking a marker on the chart),
+  // scroll the matching row into view so the user doesn't have to hunt for it.
+  useEffect(() => {
+    if (selectedIdx == null) return;
+    rowRefs.current[selectedIdx]?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [selectedIdx]);
 
   if (!trades.length)
     return <div style={{ padding: 32, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14 }}>Run backtest to see individual trades here</div>;
@@ -40,14 +47,11 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
         <tbody>
           {trades.map((t, i) => {
             const win      = t.pnl > 0;
-            const open     = expanded === i;
             const selected = selectedIdx === i;
+            const open     = selected;
             return (
               <>
-                <tr key={i} onClick={() => {
-                    setExpanded(open ? null : i);
-                    onSelect(selected ? null : i, selected ? null : t);
-                  }}
+                <tr key={i} ref={el => { rowRefs.current[i] = el; }} onClick={() => onSelect(selected ? null : i)}
                   className={selected ? "trade-row-glow" : undefined}
                   style={{ borderBottom: open ? "none" : "1px solid var(--border)", cursor: "pointer",
                     background: selected ? "rgba(239,68,68,.14)" : open ? "rgba(59,130,246,.04)" : "transparent",
@@ -189,6 +193,22 @@ export default function BacktestPage() {
   const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
   const shorts = result?.trades?.filter((t: { direction: string }) => t.direction === "short").length ?? 0;
 
+  function selectTrade(idx: number | null) {
+    const trade = idx != null ? result?.trades?.[idx] : null;
+    setSelectedTradeIdx(idx);
+    setHighlightTrade(trade ? {
+      entryTime: new Date(trade.entry_time).getTime(),
+      exitTime:  new Date(trade.exit_time).getTime(),
+      direction: trade.direction,
+    } : null);
+    if (trade) setTab("trades");
+  }
+
+  const tradeRanges: TradeRange[] = result?.trades?.map((t: { entry_time: string; exit_time: string }) => ({
+    entryTime: new Date(t.entry_time).getTime(),
+    exitTime:  new Date(t.exit_time).getTime(),
+  })) ?? [];
+
   return (
     <div style={{ padding: 28, maxWidth: 1200 }}>
 
@@ -316,7 +336,7 @@ export default function BacktestPage() {
         </div>
 
         {candles.length > 0 ? (
-          <CandleChart candles={candles} signals={markers} maLine={ma200} maLabel="200 MA" height={480} highlightTrade={highlightTrade} />
+          <CandleChart candles={candles} signals={markers} maLine={ma200} maLabel="200 MA" height={480} highlightTrade={highlightTrade} tradeRanges={tradeRanges} onTradeClick={selectTrade} />
         ) : (
           <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
             <div style={{ width: 32, height: 32, border: "2px solid var(--blue)", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -384,15 +404,7 @@ export default function BacktestPage() {
             <TradesTable
               trades={result.trades ?? []}
               selectedIdx={selectedTradeIdx}
-              onSelect={(idx, trade) => {
-                setSelectedTradeIdx(idx);
-                setHighlightTrade(trade ? {
-                  entryTime: new Date(trade.entry_time).getTime(),
-                  exitTime:  new Date(trade.exit_time).getTime(),
-                  direction: trade.direction,
-                } : null);
-                if (trade) setTab("trades");
-              }}
+              onSelect={selectTrade}
             />
           )}
         </div>
