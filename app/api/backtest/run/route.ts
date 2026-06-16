@@ -8,13 +8,18 @@ const HL = "https://api.hyperliquid.xyz/info";
 interface RawCandle { t: number; o: string; h: string; l: string; c: string; v: string; }
 interface Bar { time: number; open: number; high: number; low: number; close: number; volume: number; }
 
-async function fetchBars(symbol: string, days: number): Promise<Bar[]> {
+const INTERVAL_MS: Record<string, number> = {
+  "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+};
+
+async function fetchBars(symbol: string, interval: string, count: number): Promise<Bar[]> {
+  const ms    = INTERVAL_MS[interval] ?? INTERVAL_MS["1d"];
   const end   = Date.now();
-  const start = end - days * 86_400_000;
+  const start = end - count * ms;   // lookback measured in BARS of this interval, not days
   const resp  = await fetch(HL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval: "1d", startTime: start, endTime: end } }),
+    body: JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval, startTime: start, endTime: end } }),
   });
   const raw: RawCandle[] = await resp.json();
   return raw.map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c, volume: +c.v }))
@@ -530,8 +535,8 @@ function stats(trades: Trade[]) {
 // ── Route ─────────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const { symbol = "BTC", limit = 365 } = await req.json();
-    const bars  = await fetchBars(symbol, limit + 200);
+    const { symbol = "BTC", limit = 365, interval = "1d" } = await req.json();
+    const bars  = await fetchBars(symbol, interval, limit + 200);
     const ma    = sma200(bars);
     const { trades, signals } = runEngine(bars, ma);
     return NextResponse.json({

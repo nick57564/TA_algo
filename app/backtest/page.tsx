@@ -150,7 +150,12 @@ export default function BacktestPage() {
   }, []);
 
   useEffect(() => { loadCandles(symbol, interval, limit); }, []);
-  useEffect(() => { loadCandles(symbol, interval, limit); }, [symbol, interval, limit]);
+  useEffect(() => {
+    loadCandles(symbol, interval, limit);
+    // Clear stale results so signals from a previous timeframe/symbol aren't drawn
+    // on the newly loaded candles — re-run the backtest for the new selection.
+    setResult(null); setRunErr(null);
+  }, [symbol, interval, limit]);
 
   async function runBacktest() {
     setRunning(true);
@@ -159,7 +164,7 @@ export default function BacktestPage() {
       const r = await fetch("/api/backtest/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, limit }),
+        body: JSON.stringify({ symbol, limit, interval }),
       });
       const d = await r.json();
       if (d.error) { setRunErr(d.error); }
