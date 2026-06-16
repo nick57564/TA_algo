@@ -366,27 +366,12 @@ function runEngine(bars: Bar[], ma: number[]) {
 
     // ── check entry ──
     const aboveMA = bar.close > ma[i];
-    const maSlope = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
+    const side    = aboveMA ? "bullish" : "bearish";
+    const dir     = aboveMA ? "long"    : "short";
 
-    // Detect patterns on BOTH sides and let the PATTERN decide direction, instead
-    // of tying direction to which side of the MA price sits on. A Head & Shoulders
-    // (and other topping patterns) forms while price is still ABOVE the MA; the old
-    // logic only looked for bearish patterns once price was already BELOW the MA, so
-    // the H&S was caught far too late (or filtered out as over-extended). Now a
-    // topping pattern is shorted at its neckline break near the MA, and a bottoming
-    // pattern is bought near the MA — early, where the distance filter still passes.
-    const bearPat = detectPattern(bars, i, "bearish");
-    const bullPat = detectPattern(bars, i, "bullish");
-    const isStruct = (p: { name: string } | null) =>
-      !!p && (p.name.includes("Head") || p.name.includes("Double") || p.name.includes("Triple"));
+    const maSlope    = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
 
-    let patternResult: { name: string; engulfing: boolean } | null;
-    let dir: "long" | "short";
-    if (isStruct(bearPat))        { patternResult = bearPat; dir = "short"; }
-    else if (isStruct(bullPat))   { patternResult = bullPat; dir = "long";  }
-    else if (aboveMA && bullPat)  { patternResult = bullPat; dir = "long";  } // engulfing = continuation only
-    else if (!aboveMA && bearPat) { patternResult = bearPat; dir = "short"; }
-    else continue;
+    const patternResult = detectPattern(bars, i, side);
     if (!patternResult) continue;
 
     // Structure patterns (H&S, Double/Triple Top/Bottom) form AFTER price has moved
