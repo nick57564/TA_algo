@@ -65,8 +65,14 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
                       {t.direction.toUpperCase()}
                     </span>
                   </td>
-                  <td style={{ padding: "9px 6px", color: "var(--muted)", fontSize: 11 }}>{new Date(t.entry_time).toLocaleDateString()}</td>
-                  <td style={{ padding: "9px 6px", color: "var(--muted)", fontSize: 11 }}>{new Date(t.exit_time).toLocaleDateString()}</td>
+                  <td style={{ padding: "9px 6px", color: "var(--muted)", fontSize: 11 }}>
+                    {new Date(t.entry_time).toLocaleDateString()}
+                    <span style={{ color: "var(--muted)", opacity: 0.6 }}> {new Date(t.entry_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  </td>
+                  <td style={{ padding: "9px 6px", color: "var(--muted)", fontSize: 11 }}>
+                    {new Date(t.exit_time).toLocaleDateString()}
+                    <span style={{ color: "var(--muted)", opacity: 0.6 }}> {new Date(t.exit_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  </td>
                   <td style={{ padding: "9px 6px" }}>${t.entry_price?.toLocaleString()}</td>
                   <td style={{ padding: "9px 6px" }}>${t.exit_price?.toLocaleString()}</td>
                   <td style={{ padding: "9px 6px", fontWeight: 700, color: win ? "var(--green)" : "var(--red)" }}>

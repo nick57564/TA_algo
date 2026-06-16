@@ -406,6 +406,16 @@ function runEngine(bars: Bar[], ma: number[]) {
 
     if (confirmations.length < 2) continue;
 
+    // Realistic fill: the pattern only confirms once bar `i` has CLOSED, so we
+    // can't actually buy/sell at that close — the earliest real fill is the next
+    // bar's open. Using bar.close as the entry (look-ahead bias) makes trades
+    // look better or worse than they'd actually be, since price often gaps or
+    // keeps moving between the signal close and when you could realistically act.
+    if (i + 1 >= bars.length) continue;
+    const entryBar   = bars[i + 1];
+    const entryPrice = entryBar.open;
+    const entryTime  = entryBar.time;
+
     const barAtr  = atr(bars, i);
     let slPrice: number, tpPrice: number, slDist: number;
     if (patternResult.stop != null && patternResult.target != null) {
@@ -413,29 +423,29 @@ function runEngine(bars: Bar[], ma: number[]) {
       // small buffer, target = measured move. Validate the geometry first.
       slPrice = dir === "short" ? patternResult.stop * 1.005 : patternResult.stop * 0.995;
       tpPrice = patternResult.target;
-      const validShort = dir === "short" && slPrice > bar.close && tpPrice < bar.close;
-      const validLong  = dir === "long"  && slPrice < bar.close && tpPrice > bar.close;
+      const validShort = dir === "short" && slPrice > entryPrice && tpPrice < entryPrice;
+      const validLong  = dir === "long"  && slPrice < entryPrice && tpPrice > entryPrice;
       if (!validShort && !validLong) continue;  // degenerate geometry → skip
-      slDist = Math.abs(slPrice - bar.close);
+      slDist = Math.abs(slPrice - entryPrice);
     } else {
       slDist  = barAtr * ATR_SL_MULT;
-      slPrice = dir === "long"  ? bar.close - slDist : bar.close + slDist;
-      tpPrice = dir === "long"  ? bar.close + slDist * RR : bar.close - slDist * RR;
+      slPrice = dir === "long"  ? entryPrice - slDist : entryPrice + slDist;
+      tpPrice = dir === "long"  ? entryPrice + slDist * RR : entryPrice - slDist * RR;
     }
     const size = slDist > 0 ? (balance * RISK) / slDist : 0;
     if (size <= 0) continue;
 
-    const slPct   = (slDist / bar.close * 100).toFixed(1);
+    const slPct   = (slDist / entryPrice * 100).toFixed(1);
     const maLabel = `200 MA @ $${ma[i].toFixed(0)} (${maSlope > 0 ? "↑" : "↓"})`;
     open = {
-      direction: dir, entryTime: bar.time, exitTime: 0,
-      entryPrice: bar.close, exitPrice: 0, slPrice, tpPrice,
+      direction: dir, entryTime, exitTime: 0,
+      entryPrice, exitPrice: 0, slPrice, tpPrice,
       slDist, trailedToBreakeven: false,
-      size, pnl: 0, exitReason: "eod", entryIdx: i,
+      size, pnl: 0, exitReason: "eod", entryIdx: i + 1,
       entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} ${maLabel} · ${confirmations.join(" · ")} · SL ${slPct}% (trail to BE)`,
       analysis: "",
     };
-    signals.push({ timestamp: new Date(bar.time).toISOString(), direction: dir, type: "Entry", price: bar.close });
+    signals.push({ timestamp: new Date(entryTime).toISOString(), direction: dir, type: "Entry", price: entryPrice });
   }
 
   if (open) {
