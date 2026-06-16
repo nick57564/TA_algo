@@ -309,7 +309,8 @@ function runEngine(bars: Bar[], ma: number[]) {
   const ATR_SL_MULT = 1.5;    // SL = 1.5× ATR
   const RR          = 2;      // 2:1 reward-to-risk (closer TP = more hits)
   const CAP         = 10_000;
-  const MAX_DIST_MA = 0.10;   // skip if price >10% from 200 MA
+  const MAX_DIST_MA = 0.10;   // skip if price >10% from 200 MA (candle patterns)
+  const MAX_DIST_MA_STRUCTURE = 0.18; // structure patterns (H&S/Double/Triple) get a higher cap, not unlimited
   const MA_SLOPE_N  = 10;
   const TRAIL_LOCK  = 0.5;    // trail SL to +0.5R profit (not just breakeven)
 
@@ -374,10 +375,12 @@ function runEngine(bars: Bar[], ma: number[]) {
     if (!patternResult) continue;
 
     // Structure patterns (H&S, Double/Triple Top/Bottom) form AFTER price has moved
-    // far from the MA — don't apply distance filter to them, only to candle patterns
+    // far from the MA, so they get a higher cap — but still capped, not unlimited,
+    // otherwise wildly extended setups (20%+) get traded with no edge
     const isStructurePattern = patternResult.name.includes("Head") || patternResult.name.includes("Double") || patternResult.name.includes("Triple");
     const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
-    if (!isStructurePattern && distFromMA > MAX_DIST_MA) continue;
+    const maxDist = isStructurePattern ? MAX_DIST_MA_STRUCTURE : MAX_DIST_MA;
+    if (distFromMA > maxDist) continue;
 
     // ── Confluence: at least 1 confirmation ──────────────────────────────────
     const barRsi   = rsi(bars, i);
