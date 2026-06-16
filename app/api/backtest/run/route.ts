@@ -373,21 +373,11 @@ function runEngine(bars: Bar[], ma: number[]) {
     // ── check entry ──
     const aboveMA = bar.close > ma[i];
     const side    = aboveMA ? "bullish" : "bearish";
-    let   dir: "long" | "short" = aboveMA ? "long" : "short";
+    const dir: "long" | "short" = aboveMA ? "long" : "short";
 
     const maSlope    = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
 
-    let patternResult = detectPattern(bars, i, side);
-
-    // Reversal exception (Head & Shoulders only): an H&S breaks its neckline while
-    // price is often still ABOVE the MA, so the default side rule never looks for it
-    // there. Allow the short — it carries its OWN structure stop (right shoulder) and
-    // measured-move target, so it's traded the way an H&S actually is, not with the
-    // generic ATR 2:1 that exited before the real move.
-    if (aboveMA) {
-      const hs = detectPattern(bars, i, "bearish");
-      if (hs && hs.name.includes("Head")) { patternResult = hs; dir = "short"; }
-    }
+    const patternResult = detectPattern(bars, i, side);
     if (!patternResult) continue;
 
     // Structure patterns (H&S, Double/Triple Top/Bottom) form AFTER price has moved
