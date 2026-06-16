@@ -392,12 +392,16 @@ function runEngine(bars: Bar[], ma: number[]) {
     const barRsi   = rsi(bars, i);
     const volRatio = volumeRatio(bars, i);
     const slopePct = Math.abs(maSlope) / ma[Math.max(0, i - MA_SLOPE_N)] * 100;
+    // Slope must point the SAME way as the trade — a steep slope against us is not
+    // a confirmation, it's a warning sign. (Previously this only checked magnitude,
+    // so a strong uptrend could "confirm" a short and vice versa.)
+    const slopeAligned = (dir === "long" && maSlope > 0) || (dir === "short" && maSlope < 0);
 
     const confirmations: string[] = [];
     if (dir === "long"  && barRsi < 65)  confirmations.push(`RSI ${barRsi.toFixed(0)}`);
     if (dir === "short" && barRsi > 35)  confirmations.push(`RSI ${barRsi.toFixed(0)}`);
     if (volRatio >= 1.1)                 confirmations.push(`vol ${volRatio.toFixed(1)}×`);
-    if (slopePct > 0.3)                  confirmations.push(`MA slope ${slopePct.toFixed(1)}%`);
+    if (slopeAligned && slopePct > 0.3)  confirmations.push(`MA slope ${slopePct.toFixed(1)}%`);
     if (patternResult.engulfing)         confirmations.push("engulf confirm");
 
     if (confirmations.length < 2) continue;
