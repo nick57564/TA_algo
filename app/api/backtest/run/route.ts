@@ -229,10 +229,14 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
 function analyse(
   pnl: number, holdDays: number, exitReason: string, streak: number,
   direction: "long" | "short", entryPrice: number, entryIdx: number,
-  ma: number[], bars: Bar[]
+  ma: number[], bars: Bar[], targetReached = false,
 ): string {
   if (exitReason === "eod") return "Still open at end of data.";
-  if (exitReason === "be")  return "✅ Trailing stop exit — stop followed price after it moved 1R in our favour, then price reversed and tagged the trailed stop. Profit locked in along the way, but the move reversed before the final target.";
+  if (exitReason === "be") {
+    return targetReached
+      ? "✅ Trailing stop exit — price ran past the original target, then reversed and tagged the trailed stop. Captured more than the original plan, gave back the rest once momentum stalled."
+      : "✅ Trailing stop exit — stop followed price after it moved 1R in our favour, then price reversed before reaching the target and tagged the trailed stop. Profit locked in along the way.";
+  }
 
   // ── Context signals ──────────────────────────────────────────────────────
   const maAtEntry  = ma[entryIdx];
@@ -345,14 +349,16 @@ function runEngine(bars: Bar[], ma: number[]) {
         : open.entryPrice - open.extremePrice;
 
       // Once a structure trade reaches its measured-move target, switch to a
-      // much tighter trail (30% of the original distance) — it's allowed to
-      // keep riding the move, but it shouldn't be able to give back months of
-      // gains waiting for a full-width reversal before locking anything in.
+      // chandelier-style trail based on CURRENT volatility (recomputed every
+      // bar) instead of a number frozen at entry — a fixed distance from
+      // entry day stays just as wide a month later even if the market has
+      // since calmed down, letting price round-trip for weeks before the
+      // stop is finally touched. Trailing off live ATR hugs the actual move.
       if (open.isStructure && !open.targetReached) {
         const tpHit = open.direction === "long" ? bar.high >= open.tpPrice : bar.low <= open.tpPrice;
         if (tpHit) open.targetReached = true;
       }
-      const trailDist = open.targetReached ? open.slDist * 0.3 : open.slDist;
+      const trailDist = open.targetReached ? atr(bars, i, 10) * 1.5 : open.slDist;
 
       if (favMove >= open.slDist || open.targetReached) {
         // Once price has moved 1R in our favour (or hit the structure target),
@@ -386,7 +392,7 @@ function runEngine(bars: Bar[], ma: number[]) {
         open.pnl    = (open.exitPrice - open.entryPrice) * mult * open.size;
         balance    += open.pnl;
         const holdD = Math.round((open.exitTime - open.entryTime) / 86_400_000);
-        open.analysis = analyse(open.pnl, holdD, open.exitReason, lossStreak, open.direction, open.entryPrice, open.entryIdx, ma, bars);
+        open.analysis = analyse(open.pnl, holdD, open.exitReason, lossStreak, open.direction, open.entryPrice, open.entryIdx, ma, bars, open.targetReached);
         if (open.pnl < 0) lossStreak++; else lossStreak = 0;
         signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : open.exitReason === "be" ? "Exit BE" : "Exit SL", price: open.exitPrice });
         trades.push(open);
