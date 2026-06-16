@@ -358,7 +358,7 @@ function runEngine(bars: Bar[], ma: number[]) {
         const tpHit = open.direction === "long" ? bar.high >= open.tpPrice : bar.low <= open.tpPrice;
         if (tpHit) open.targetReached = true;
       }
-      const trailDist = open.targetReached ? atr(bars, i, 10) * 1.5 : open.slDist;
+      const trailDist = open.targetReached ? atr(bars, i, 10) * 3 : open.slDist;
 
       if (favMove >= open.slDist || open.targetReached) {
         // Once price has moved 1R in our favour (or hit the structure target),
