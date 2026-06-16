@@ -220,7 +220,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
     <div style={{ position: "relative", width: "100%", height, overflow: "hidden", borderRadius: 8 }}>
       <div
         ref={containerRef}
-        style={{ width: "100%", height, borderRadius: 8, overflow: "hidden" }}
+        style={{ width: "100%", height, borderRadius: 8, overflow: "hidden", position: "relative", zIndex: 0 }}
       />
       <div
         ref={overlayRef}
@@ -229,6 +229,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
           position: "absolute",
           top: 0,
           bottom: 0,
+          zIndex: 5,
           pointerEvents: "none",
           background: "rgba(239,68,68,.22)",
           borderLeft: "3px solid #ef4444",
