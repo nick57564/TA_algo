@@ -68,7 +68,7 @@ function pivots(bars: Bar[], type: "high" | "low", n = 3): { price: number; idx:
 
 // ── Pattern detection at bar `i` ─────────────────────────────────────────────
 // Returns { name, engulfing } where engulfing is a bonus confirmation flag
-function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { name: string; engulfing: boolean } | null {
+function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { name: string; engulfing: boolean; stop?: number; target?: number } | null {
   if (i < 20) return null;
   const win    = bars.slice(i - 100, i + 1);
   const offset = i - 100 < 0 ? i : 100;
@@ -136,7 +136,16 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
           const neck  = Math.max(neckL, neckR);
           if (close < neck * 0.995) {
             found = true;
-            return { name: "📉 Head & Shoulders — left shoulder, head, right shoulder formed; neckline broken", engulfing: bearEngulf };
+            // Structure-based trade management, the way an H&S is actually traded:
+            // stop just above the RIGHT SHOULDER, target = measured move (head-to-
+            // neckline height projected down from the neckline).
+            const measured = neck - (head.price - neck);
+            return {
+              name: "📉 Head & Shoulders — left shoulder, head, right shoulder formed; neckline broken",
+              engulfing: bearEngulf,
+              stop: rsPrice,
+              target: measured,
+            };
           }
         }
       }
@@ -367,11 +376,21 @@ function runEngine(bars: Bar[], ma: number[]) {
     // ── check entry ──
     const aboveMA = bar.close > ma[i];
     const side    = aboveMA ? "bullish" : "bearish";
-    const dir     = aboveMA ? "long"    : "short";
+    let   dir: "long" | "short" = aboveMA ? "long" : "short";
 
     const maSlope    = ma[i] - ma[Math.max(0, i - MA_SLOPE_N)];
 
-    const patternResult = detectPattern(bars, i, side);
+    let patternResult = detectPattern(bars, i, side);
+
+    // Reversal exception (Head & Shoulders only): an H&S breaks its neckline while
+    // price is often still ABOVE the MA, so the default side rule never looks for it
+    // there. Allow the short — it carries its OWN structure stop (right shoulder) and
+    // measured-move target, so it's traded the way an H&S actually is, not with the
+    // generic ATR 2:1 that exited before the real move.
+    if (aboveMA) {
+      const hs = detectPattern(bars, i, "bearish");
+      if (hs && hs.name.includes("Head")) { patternResult = hs; dir = "short"; }
+    }
     if (!patternResult) continue;
 
     // Structure patterns (H&S, Double/Triple Top/Bottom) form AFTER price has moved
@@ -397,10 +416,22 @@ function runEngine(bars: Bar[], ma: number[]) {
     if (confirmations.length < 2) continue;
 
     const barAtr  = atr(bars, i);
-    const slDist  = barAtr * ATR_SL_MULT;
-    const slPrice = dir === "long"  ? bar.close - slDist : bar.close + slDist;
-    const tpPrice = dir === "long"  ? bar.close + slDist * RR : bar.close - slDist * RR;
-    const size    = slDist > 0 ? (balance * RISK) / slDist : 0;
+    let slPrice: number, tpPrice: number, slDist: number;
+    if (patternResult.stop != null && patternResult.target != null) {
+      // Structure-based management (e.g. H&S): stop beyond the structure with a
+      // small buffer, target = measured move. Validate the geometry first.
+      slPrice = dir === "short" ? patternResult.stop * 1.005 : patternResult.stop * 0.995;
+      tpPrice = patternResult.target;
+      const validShort = dir === "short" && slPrice > bar.close && tpPrice < bar.close;
+      const validLong  = dir === "long"  && slPrice < bar.close && tpPrice > bar.close;
+      if (!validShort && !validLong) continue;  // degenerate geometry → skip
+      slDist = Math.abs(slPrice - bar.close);
+    } else {
+      slDist  = barAtr * ATR_SL_MULT;
+      slPrice = dir === "long"  ? bar.close - slDist : bar.close + slDist;
+      tpPrice = dir === "long"  ? bar.close + slDist * RR : bar.close - slDist * RR;
+    }
+    const size = slDist > 0 ? (balance * RISK) / slDist : 0;
     if (size <= 0) continue;
 
     const slPct   = (slDist / bar.close * 100).toFixed(1);
