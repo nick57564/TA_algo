@@ -47,6 +47,8 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const overlayRef   = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HighlightTrade | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || !candles.length) return;
@@ -157,37 +159,85 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       });
     }
 
+    // Keep the glow box positioned over the trade's time window as the chart scrolls/zooms
+    const updateOverlay = () => {
+      const trade = highlightRef.current;
+      const ov = overlayRef.current;
+      if (!ov) return;
+      if (!trade || !chartRef.current) { ov.style.display = "none"; return; }
+      const ts = chartRef.current.timeScale();
+      const x1 = ts.timeToCoordinate(Math.floor(trade.entryTime / 1000) as Time);
+      const x2 = ts.timeToCoordinate(Math.floor(trade.exitTime  / 1000) as Time);
+      if (x1 === null || x2 === null) { ov.style.display = "none"; return; }
+      const left  = Math.min(x1, x2);
+      const width = Math.max(Math.abs(x2 - x1), 2);
+      ov.style.display = "block";
+      ov.style.left  = `${left}px`;
+      ov.style.width = `${width}px`;
+    };
+    updateOverlay();
+    chart.timeScale().subscribeVisibleTimeRangeChange(updateOverlay);
+
     // Resize observer
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth });
+        updateOverlay();
       }
     });
     ro.observe(containerRef.current);
 
     chartRef.current  = chart;
     seriesRef.current = series;
+    (chartRef.current as unknown as { _updateOverlay?: () => void })._updateOverlay = updateOverlay;
 
     return () => {
       ro.disconnect();
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(updateOverlay);
       chart.remove();
     };
   }, [candles, signals, height]);
 
-  // Zoom to highlighted trade without re-building the chart
+  // Zoom to highlighted trade + reposition the glow overlay without re-building the chart
   useEffect(() => {
-    if (!highlightTrade || !chartRef.current) return;
-    const pad = 15 * 86400;
-    chartRef.current.timeScale().setVisibleRange({
-      from: (Math.floor(highlightTrade.entryTime / 1000) - pad) as Time,
-      to:   (Math.floor(highlightTrade.exitTime  / 1000) + pad) as Time,
-    });
+    highlightRef.current = highlightTrade ?? null;
+    if (!chartRef.current) return;
+    if (highlightTrade) {
+      const pad = 15 * 86400;
+      chartRef.current.timeScale().setVisibleRange({
+        from: (Math.floor(highlightTrade.entryTime / 1000) - pad) as Time,
+        to:   (Math.floor(highlightTrade.exitTime  / 1000) + pad) as Time,
+      });
+    }
+    (chartRef.current as unknown as { _updateOverlay?: () => void })._updateOverlay?.();
   }, [highlightTrade]);
 
   return (
-    <div
-      ref={containerRef}
-      style={{ width: "100%", height, borderRadius: 8, overflow: "hidden" }}
-    />
+    <div style={{ position: "relative", width: "100%", height }}>
+      <div
+        ref={containerRef}
+        style={{ width: "100%", height, borderRadius: 8, overflow: "hidden" }}
+      />
+      <div
+        ref={overlayRef}
+        style={{
+          display: "none",
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          pointerEvents: "none",
+          background: "rgba(239,68,68,.10)",
+          border: "2px solid rgba(239,68,68,.85)",
+          borderRadius: 4,
+          animation: "chartTradeGlow 1.4s ease-in-out infinite",
+        }}
+      />
+      <style>{`
+        @keyframes chartTradeGlow {
+          0%, 100% { box-shadow: 0 0 14px rgba(239,68,68,.5), inset 0 0 18px rgba(239,68,68,.12); }
+          50%      { box-shadow: 0 0 32px rgba(239,68,68,.9), inset 0 0 28px rgba(239,68,68,.28); }
+        }
+      `}</style>
+    </div>
   );
 }
