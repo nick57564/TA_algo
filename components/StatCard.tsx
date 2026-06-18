@@ -7,50 +7,36 @@ interface StatCardProps {
 }
 
 const COLOR_MAP = {
-  green:  { text: "var(--green2)", glow: "rgba(16,185,129,.18)",  border: "rgba(16,185,129,.25)", bg: "rgba(16,185,129,.06)"  },
-  red:    { text: "var(--red2)",   glow: "rgba(239,68,68,.18)",   border: "rgba(239,68,68,.25)",  bg: "rgba(239,68,68,.06)"   },
-  yellow: { text: "var(--yellow2)",glow: "rgba(245,158,11,.18)",  border: "rgba(245,158,11,.25)", bg: "rgba(245,158,11,.06)"  },
-  blue:   { text: "var(--blue2)",  glow: "rgba(59,130,246,.18)",  border: "rgba(59,130,246,.25)", bg: "rgba(59,130,246,.06)"  },
-  purple: { text: "var(--purple2)",glow: "rgba(139,92,246,.18)",  border: "rgba(139,92,246,.25)", bg: "rgba(139,92,246,.06)"  },
+  green:  { text: "#00d4b4", border: "rgba(0,212,180,.2)",   bg: "rgba(0,212,180,.07)"   },
+  red:    { text: "#ea3943", border: "rgba(234,57,67,.2)",   bg: "rgba(234,57,67,.07)"   },
+  yellow: { text: "#f5a623", border: "rgba(245,166,35,.2)",  bg: "rgba(245,166,35,.07)"  },
+  blue:   { text: "#60a5fa", border: "rgba(59,130,246,.2)",  bg: "rgba(59,130,246,.07)"  },
+  purple: { text: "#a78bfa", border: "rgba(139,92,246,.2)",  bg: "rgba(139,92,246,.07)"  },
 };
 
 export default function StatCard({ label, value, sub, color, glow }: StatCardProps) {
   const c = color ? COLOR_MAP[color] : null;
   return (
     <div style={{
-      background: c ? c.bg : "rgba(255,255,255,0.03)",
+      background: c ? c.bg : "var(--card)",
       border: `1px solid ${c ? c.border : "var(--border)"}`,
-      borderRadius: 16,
-      padding: "20px 22px",
-      backdropFilter: "blur(20px)",
-      WebkitBackdropFilter: "blur(20px)",
+      borderRadius: 10,
+      padding: "16px 18px",
       boxShadow: glow && c
-        ? `0 0 0 1px ${c.border}, 0 8px 32px ${c.glow}, inset 0 1px 0 rgba(255,255,255,0.06)`
-        : "0 4px 24px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,0.04)",
-      position: "relative",
-      overflow: "hidden",
-      transition: "box-shadow .2s, transform .2s",
+        ? `0 0 20px ${c.border}`
+        : "none",
     }}>
-      {/* subtle top-edge highlight */}
-      <div style={{
-        position: "absolute", top: 0, left: 0, right: 0, height: 1,
-        background: c
-          ? `linear-gradient(90deg, transparent, ${c.border}, transparent)`
-          : "linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)",
-      }} />
       <p style={{
         fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em",
-        color: "var(--muted)", marginBottom: 10, fontWeight: 600,
+        color: "var(--muted)", marginBottom: 8, fontWeight: 600,
       }}>{label}</p>
       <p className="num" style={{
-        fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em",
-        color: c ? c.text : "var(--text)",
-        lineHeight: 1,
+        fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em",
+        color: c ? c.text : "var(--text)", lineHeight: 1,
       }}>{value}</p>
       {sub && (
         <p className="num" style={{
-          fontSize: 11, color: "var(--muted)", marginTop: 6,
-          letterSpacing: "0.02em",
+          fontSize: 11, color: "var(--muted)", marginTop: 5,
         }}>{sub}</p>
       )}
     </div>

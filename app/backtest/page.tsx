@@ -16,30 +16,26 @@ const INTERVALS: { label: string; value: string }[] = [
 ];
 const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 
-/* ── Pill button ─────────────────────────────────────────────────── */
-function PillBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+/* ── Segment button (Hyperliquid-style) ── */
+function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button onClick={onClick} style={{
-      padding: "6px 14px", borderRadius: 999, fontSize: 12, fontWeight: 700,
-      cursor: "pointer", transition: "all .15s",
-      background: active
-        ? "linear-gradient(135deg, #3b82f6, #6366f1)"
-        : "rgba(255,255,255,0.05)",
-      color: active ? "#fff" : "var(--muted)",
-      border: active ? "1px solid rgba(99,102,241,.4)" : "1px solid rgba(255,255,255,0.06)",
-      boxShadow: active ? "0 0 16px rgba(99,102,241,.35), inset 0 1px 0 rgba(255,255,255,.15)" : "none",
+      padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+      cursor: "pointer", transition: "all .12s",
+      background: active ? "var(--teal-bg)" : "transparent",
+      color: active ? "var(--teal)" : "var(--muted)",
+      border: active ? "1px solid var(--teal-border)" : "1px solid transparent",
     }}>{children}</button>
   );
 }
 
-/* ── Trades table ────────────────────────────────────────────────── */
+/* ── Trades table ── */
 function TradesTable({ trades, selectedIdx, onSelect }: {
   trades: import("@/lib/types").Trade[];
   selectedIdx: number | null;
   onSelect: (idx: number | null) => void;
 }) {
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
-
   useEffect(() => {
     if (selectedIdx == null) return;
     rowRefs.current[selectedIdx]?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -48,35 +44,23 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
   if (!trades.length)
     return (
       <div style={{
-        padding: 48, textAlign: "center", color: "var(--muted)",
-        background: "rgba(255,255,255,0.02)",
-        border: "1px solid var(--border)", borderRadius: 20,
-        backdropFilter: "blur(20px)",
+        padding: 40, textAlign: "center", color: "var(--muted)",
+        background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10,
       }}>
-        <p style={{ fontSize: 32, marginBottom: 8, opacity: 0.3 }}>📊</p>
-        <p style={{ fontSize: 13 }}>Run backtest to see individual trades</p>
+        Run backtest to see trades
       </div>
     );
 
   return (
-    <div style={{
-      background: "rgba(255,255,255,0.02)",
-      border: "1px solid var(--border)",
-      borderRadius: 20, overflow: "hidden",
-      backdropFilter: "blur(20px)",
-      boxShadow: "0 8px 40px rgba(0,0,0,.4)",
-    }}>
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
-          <tr style={{
-            borderBottom: "1px solid var(--border)",
-            background: "rgba(255,255,255,0.03)",
-          }}>
-            {["","#","Dir","Entry","Exit","Entry $","Exit $","P&L","Result","Trigger"].map(h => (
+          <tr style={{ borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+            {["","#","Side","Entry","Exit","Entry $","Exit $","P&L","Result","Pattern"].map(h => (
               <th key={h} style={{
-                padding: "12px 14px", textAlign: "left",
-                color: "var(--muted)", fontWeight: 700, fontSize: 10,
-                textTransform: "uppercase", letterSpacing: "0.08em",
+                padding: "10px 12px", textAlign: "left",
+                color: "var(--muted)", fontWeight: 600, fontSize: 10,
+                textTransform: "uppercase", letterSpacing: "0.07em",
               }}>{h}</th>
             ))}
           </tr>
@@ -84,110 +68,96 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
         <tbody>
           {trades.map((t, i) => {
             const win      = t.pnl > 0;
+            const isLong   = t.direction === "long";
             const selected = selectedIdx === i;
-            const open     = selected;
             return (
               <>
-                <tr
-                  key={i}
-                  ref={el => { rowRefs.current[i] = el; }}
+                <tr key={i} ref={el => { rowRefs.current[i] = el; }}
                   onClick={() => onSelect(selected ? null : i)}
-                  className={selected ? "trade-row-glow" : undefined}
+                  className={selected ? "trade-row-sel" : undefined}
                   style={{
-                    borderBottom: open ? "none" : "1px solid rgba(255,255,255,0.04)",
-                    cursor: "pointer", transition: "background .12s",
-                    background: selected
-                      ? "rgba(239,68,68,.12)"
-                      : "transparent",
-                    outline: selected ? "1px solid rgba(239,68,68,.6)" : "none",
-                    outlineOffset: selected ? -1 : 0,
-                    boxShadow: selected
-                      ? "0 0 20px rgba(239,68,68,.4), inset 0 0 16px rgba(239,68,68,.1)"
-                      : "none",
-                    position: "relative",
+                    borderBottom: selected ? "none" : "1px solid rgba(255,255,255,0.04)",
+                    cursor: "pointer", transition: "background .1s",
+                    background: selected ? "rgba(0,212,180,.06)" : "transparent",
+                    outline: selected ? "1px solid rgba(0,212,180,.35)" : "none",
+                    outlineOffset: -1,
                   }}>
-                  <td style={{ padding: "10px 8px 10px 16px", color: "var(--muted)", fontSize: 10 }}>
-                    <span style={{ opacity: 0.5 }}>{open ? "▼" : "▶"}</span>
+                  <td style={{ padding: "9px 8px 9px 12px", color: "var(--muted)", fontSize: 10 }}>
+                    {selected ? "▼" : "▶"}
                   </td>
-                  <td style={{ padding: "10px 8px", color: "var(--muted)", fontWeight: 600 }}>{i + 1}</td>
-                  <td style={{ padding: "10px 8px" }}>
+                  <td style={{ padding: "9px 8px", color: "var(--muted)", fontWeight: 600 }}>{i + 1}</td>
+                  <td style={{ padding: "9px 8px" }}>
                     <span style={{
-                      padding: "3px 10px", borderRadius: 999, fontSize: 10, fontWeight: 800,
-                      background: t.direction === "long"
-                        ? "rgba(16,185,129,.15)" : "rgba(239,68,68,.15)",
-                      color: t.direction === "long" ? "var(--green2)" : "var(--red2)",
-                      border: `1px solid ${t.direction === "long" ? "rgba(16,185,129,.3)" : "rgba(239,68,68,.3)"}`,
-                      letterSpacing: "0.06em",
-                    }}>{t.direction.toUpperCase()}</span>
+                      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700,
+                      background: isLong ? "rgba(0,212,180,.12)" : "rgba(234,57,67,.12)",
+                      color: isLong ? "var(--teal)" : "var(--red)",
+                      border: `1px solid ${isLong ? "rgba(0,212,180,.2)" : "rgba(234,57,67,.2)"}`,
+                    }}>{isLong ? "LONG" : "SHORT"}</span>
                   </td>
-                  <td style={{ padding: "10px 8px", color: "var(--muted)", fontSize: 11 }}>
+                  <td style={{ padding: "9px 8px", color: "var(--muted)", fontSize: 11 }}>
                     {new Date(t.entry_time).toLocaleDateString()}
                     <span style={{ opacity: 0.5 }}> {new Date(t.entry_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   </td>
-                  <td style={{ padding: "10px 8px", color: "var(--muted)", fontSize: 11 }}>
+                  <td style={{ padding: "9px 8px", color: "var(--muted)", fontSize: 11 }}>
                     {new Date(t.exit_time).toLocaleDateString()}
                     <span style={{ opacity: 0.5 }}> {new Date(t.exit_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   </td>
-                  <td style={{ padding: "10px 8px", fontWeight: 600 }}>${t.entry_price?.toLocaleString()}</td>
-                  <td style={{ padding: "10px 8px", fontWeight: 600 }}>${t.exit_price?.toLocaleString()}</td>
-                  <td style={{ padding: "10px 8px", fontWeight: 800, color: win ? "var(--green2)" : "var(--red2)", fontSize: 13 }}>
+                  <td style={{ padding: "9px 8px", fontWeight: 600 }}>${t.entry_price?.toLocaleString()}</td>
+                  <td style={{ padding: "9px 8px", fontWeight: 600 }}>${t.exit_price?.toLocaleString()}</td>
+                  <td style={{ padding: "9px 8px", fontWeight: 700,
+                    color: win ? "var(--teal)" : "var(--red)", fontSize: 13 }}>
                     {win ? "+" : ""}${t.pnl?.toFixed(2)}
                   </td>
-                  <td style={{ padding: "10px 8px" }}>
+                  <td style={{ padding: "9px 8px" }}>
                     <span style={{
-                      padding: "3px 10px", borderRadius: 999, fontSize: 10, fontWeight: 700,
-                      letterSpacing: "0.04em",
+                      padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
                       background: win
-                        ? "rgba(16,185,129,.15)"
-                        : t.exit_reason === "eod" ? "rgba(100,116,139,.12)"
-                        : t.exit_reason === "be"  ? "rgba(99,102,241,.15)"
-                        : "rgba(239,68,68,.15)",
-                      color: win
-                        ? "var(--green2)"
+                        ? "rgba(0,212,180,.12)"
+                        : t.exit_reason === "be" ? "rgba(96,165,250,.1)"
+                        : t.exit_reason === "eod" ? "rgba(90,112,144,.1)"
+                        : "rgba(234,57,67,.12)",
+                      color: win ? "var(--teal)"
+                        : t.exit_reason === "be" ? "var(--blue2)"
                         : t.exit_reason === "eod" ? "var(--muted)"
-                        : t.exit_reason === "be"  ? "var(--purple2)"
-                        : "var(--red2)",
+                        : "var(--red)",
                       border: `1px solid ${win
-                        ? "rgba(16,185,129,.3)"
-                        : t.exit_reason === "eod" ? "rgba(100,116,139,.2)"
-                        : t.exit_reason === "be"  ? "rgba(99,102,241,.3)"
-                        : "rgba(239,68,68,.3)"}`,
+                        ? "rgba(0,212,180,.2)"
+                        : t.exit_reason === "be" ? "rgba(96,165,250,.2)"
+                        : t.exit_reason === "eod" ? "rgba(90,112,144,.2)"
+                        : "rgba(234,57,67,.2)"}`,
                     }}>
                       {t.exit_reason === "be" ? "BE" : t.exit_reason?.toUpperCase()}
                     </span>
                   </td>
                   <td style={{
-                    padding: "10px 8px", fontSize: 11, color: "var(--muted)",
-                    maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    padding: "9px 8px", fontSize: 11, color: "var(--muted)",
+                    maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                   }}>{t.entry_reason}</td>
                 </tr>
-                {open && (
-                  <tr key={`${i}-analysis`} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                    <td colSpan={10} style={{ padding: "0 16px 16px 44px" }}>
+                {selected && (
+                  <tr key={`${i}-detail`} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <td colSpan={10} style={{ padding: "0 12px 12px 36px" }}>
                       <div style={{
-                        background: win ? "rgba(16,185,129,.06)" : "rgba(239,68,68,.06)",
-                        border: `1px solid ${win ? "rgba(16,185,129,.18)" : "rgba(239,68,68,.18)"}`,
-                        borderRadius: 14, padding: "14px 18px",
-                        backdropFilter: "blur(10px)",
+                        background: win ? "rgba(0,212,180,.05)" : "rgba(234,57,67,.05)",
+                        border: `1px solid ${win ? "rgba(0,212,180,.15)" : "rgba(234,57,67,.15)"}`,
+                        borderRadius: 8, padding: "12px 16px",
                       }}>
                         <p style={{
-                          fontSize: 10, fontWeight: 800, textTransform: "uppercase",
-                          letterSpacing: "0.1em",
-                          color: win ? "var(--green2)" : "var(--red2)",
-                          marginBottom: 8,
+                          fontSize: 10, fontWeight: 700, textTransform: "uppercase",
+                          letterSpacing: "0.08em", color: win ? "var(--teal)" : "var(--red)", marginBottom: 6,
                         }}>{win ? "✓ Why it worked" : "✗ Why it failed"}</p>
                         <p style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.7 }}>{t.analysis ?? "—"}</p>
-                        <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
                           {[
                             `SL @ $${t.sl_price?.toFixed(0)}`,
                             `TP @ $${t.tp_price?.toFixed(0)}`,
-                            `Duration: ${Math.round((new Date(t.exit_time).getTime() - new Date(t.entry_time).getTime()) / 3_600_000)}h`,
+                            `Hold: ${Math.round((new Date(t.exit_time).getTime() - new Date(t.entry_time).getTime()) / 3_600_000)}h`,
                           ].map(s => (
                             <span key={s} style={{
                               fontSize: 10, color: "var(--muted)",
-                              padding: "2px 10px", borderRadius: 999,
-                              background: "rgba(255,255,255,0.05)",
-                              border: "1px solid rgba(255,255,255,0.07)",
+                              padding: "2px 8px", borderRadius: 4,
+                              background: "rgba(255,255,255,0.04)",
+                              border: "1px solid var(--border)",
                             }}>{s}</span>
                           ))}
                         </div>
@@ -204,7 +174,7 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
   );
 }
 
-/* ── Main page ───────────────────────────────────────────────────── */
+/* ── Main page ── */
 export default function BacktestPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
   const [candles,  setCandles]  = useState<Candle[]>([]);
@@ -244,16 +214,13 @@ export default function BacktestPage() {
       });
       const d = await r.json();
       if (d.error) setRunErr(d.error);
-      else setResult(d);
+      else { setResult(d); setTab("stats"); }
     } catch (e) { setRunErr(String(e)); }
     setRunning(false);
   }
 
   const markers: SignalMarker[] = result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
-    time:      new Date(s.timestamp).getTime(),
-    direction: s.direction,
-    type:      s.type,
-    price:     s.price,
+    time: new Date(s.timestamp).getTime(), direction: s.direction, type: s.type, price: s.price,
   })) ?? [];
   const months = result ? Object.entries(result.monthly_returns ?? {}).sort() : [];
 
@@ -286,121 +253,135 @@ export default function BacktestPage() {
     exitTime:  new Date(t.exit_time).getTime(),
   })) ?? [];
 
-  const winRate = result?.winrate_pct ?? 0;
-  const netPnl  = result?.net_pnl ?? 0;
-
   return (
-    <div style={{ padding: "32px 28px", maxWidth: 1240, margin: "0 auto" }}>
+    /* full-width, no max-width */
+    <div style={{ padding: "20px 24px", minHeight: "100vh" }}>
 
-      {/* ── Header ── */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28 }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-            <div style={{
-              width: 8, height: 8, borderRadius: "50%",
-              background: "var(--green2)",
-              boxShadow: "0 0 10px var(--green2)",
-              animation: "pulse-dot 2s ease infinite",
-            }} />
-            <span style={{ fontSize: 11, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600 }}>
-              Live · Hyperliquid
-            </span>
+      {/* ── Top bar: title + symbol strip + run button ── */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 16,
+        marginBottom: 16, flexWrap: "wrap",
+      }}>
+        {/* Title */}
+        <div style={{ marginRight: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 8px var(--teal)", display: "inline-block" }} className="pulse" />
+            <span style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600 }}>Live · Hyperliquid</span>
           </div>
-          <h1 style={{
-            fontSize: 28, fontWeight: 900, letterSpacing: "-0.03em",
-            background: "linear-gradient(135deg, #e8edf8 30%, #60a5fa 70%, #a78bfa 100%)",
-            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
-          }}>Strategy Backtest</h1>
-          <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>
-            Pattern recognition · {symbol}-USDC · {interval.toUpperCase()}
-          </p>
+          <h1 style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" }}>
+            Strategy <span style={{ color: "var(--teal)" }}>Backtest</span>
+          </h1>
         </div>
 
-        <button
-          onClick={runBacktest}
-          disabled={running}
-          style={{
-            padding: "12px 32px", borderRadius: 999, fontSize: 14, fontWeight: 800,
+        {/* Symbol pills */}
+        <div style={{
+          display: "flex", gap: 4, flexWrap: "wrap",
+          padding: "6px 10px", background: "var(--card)",
+          border: "1px solid var(--border)", borderRadius: 8,
+        }}>
+          {SYMBOLS.map(s => <SegBtn key={s} active={symbol === s} onClick={() => setSymbol(s)}>{s}</SegBtn>)}
+        </div>
+
+        {/* Timeframe pills */}
+        <div style={{
+          display: "flex", gap: 4,
+          padding: "6px 10px", background: "var(--card)",
+          border: "1px solid var(--border)", borderRadius: 8,
+        }}>
+          {INTERVALS.map(iv => <SegBtn key={iv.value} active={interval === iv.value} onClick={() => setInterval(iv.value)}>{iv.label}</SegBtn>)}
+        </div>
+
+        {/* Lookback pills */}
+        <div style={{
+          display: "flex", gap: 4,
+          padding: "6px 10px", background: "var(--card)",
+          border: "1px solid var(--border)", borderRadius: 8,
+        }}>
+          {LIMITS.map(l => <SegBtn key={l} active={limit === l} onClick={() => setLimit(l)}>{l}d</SegBtn>)}
+        </div>
+
+        {/* Run button — far right */}
+        <div style={{ marginLeft: "auto" }}>
+          <button onClick={runBacktest} disabled={running} style={{
+            padding: "9px 24px", borderRadius: 8, fontSize: 13, fontWeight: 700,
             cursor: running ? "not-allowed" : "pointer",
-            background: running
-              ? "rgba(255,255,255,0.05)"
-              : "linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%)",
-            color: running ? "var(--muted)" : "#fff",
-            border: running ? "1px solid var(--border)" : "1px solid rgba(139,92,246,.4)",
-            display: "flex", alignItems: "center", gap: 9,
-            boxShadow: running
-              ? "none"
-              : "0 0 30px rgba(99,102,241,.45), 0 4px 16px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.2)",
-            transition: "all .2s",
-            letterSpacing: "0.01em",
+            background: running ? "var(--dim)" : "var(--teal)",
+            color: running ? "var(--muted)" : "#0b0e1a",
+            border: "none", display: "flex", alignItems: "center", gap: 8,
+            boxShadow: running ? "none" : "0 0 20px rgba(0,212,180,.35)",
+            transition: "all .15s",
           }}>
-          {running ? (
-            <>
-              <span style={{
-                width: 14, height: 14, border: "2px solid var(--muted)",
-                borderTopColor: "transparent", borderRadius: "50%",
-                display: "inline-block", animation: "spin .7s linear infinite",
-              }} />
-              Analysing…
-            </>
-          ) : "▶ Run Backtest"}
-        </button>
+            {running ? (
+              <>
+                <span style={{ width: 13, height: 13, border: "2px solid var(--muted)", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+                Analysing…
+              </>
+            ) : "▶ Run Backtest"}
+          </button>
+        </div>
       </div>
 
       {runErr && (
         <div style={{
-          background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.25)",
-          borderRadius: 14, padding: "12px 18px", marginBottom: 16,
+          background: "rgba(234,57,67,.08)", border: "1px solid rgba(234,57,67,.2)",
+          borderRadius: 8, padding: "10px 16px", marginBottom: 14,
           fontSize: 12, color: "var(--red2)",
-          backdropFilter: "blur(10px)",
         }}>⚠ {runErr}</div>
       )}
 
-      {/* ── Controls bar ── */}
+      {/* ── Hyperliquid-style data strip ── */}
       <div style={{
-        background: "rgba(255,255,255,0.025)",
-        border: "1px solid var(--border)",
-        borderRadius: 20, padding: "18px 22px", marginBottom: 18,
-        display: "flex", flexWrap: "wrap", gap: 24, alignItems: "center",
-        backdropFilter: "blur(20px)",
-        boxShadow: "0 4px 32px rgba(0,0,0,.25)",
+        display: "flex", alignItems: "center", gap: 0,
+        background: "var(--card)", border: "1px solid var(--border)",
+        borderRadius: 8, marginBottom: 12, overflow: "hidden",
       }}>
-        <div>
-          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--muted)", display: "block", marginBottom: 8, fontWeight: 700 }}>Symbol</label>
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {SYMBOLS.map(s => <PillBtn key={s} active={symbol === s} onClick={() => setSymbol(s)}>{s}</PillBtn>)}
-          </div>
+        {/* Symbol badge */}
+        <div style={{
+          padding: "10px 18px", borderRight: "1px solid var(--border)",
+          display: "flex", alignItems: "center", gap: 8,
+          background: "rgba(0,212,180,.05)",
+        }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--teal)" }} />
+          <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: "-0.01em" }}>{symbol}-USDC</span>
+          <span style={{
+            fontSize: 10, padding: "1px 6px", borderRadius: 4,
+            background: "var(--teal-bg)", border: "1px solid var(--teal-border)",
+            color: "var(--teal)", fontWeight: 700, letterSpacing: "0.06em",
+          }}>{interval.toUpperCase()}</span>
         </div>
 
-        <div style={{ width: 1, height: 40, background: "var(--border)", flexShrink: 0 }} />
-
-        <div>
-          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--muted)", display: "block", marginBottom: 8, fontWeight: 700 }}>Timeframe</label>
-          <div style={{ display: "flex", gap: 5 }}>
-            {INTERVALS.map(iv => <PillBtn key={iv.value} active={interval === iv.value} onClick={() => setInterval(iv.value)}>{iv.label}</PillBtn>)}
+        {/* Stats */}
+        {[
+          { label: "Candles", value: candles.length > 0 ? candles.length.toLocaleString() : "—" },
+          { label: "Signals",  value: markers.filter(m => m.type === "Entry").length > 0 ? String(markers.filter(m => m.type === "Entry").length) : "—" },
+          { label: "Long",    value: longs  > 0 ? String(longs)  : "—", color: "var(--teal)" },
+          { label: "Short",   value: shorts > 0 ? String(shorts) : "—", color: "var(--red)"  },
+          { label: "Win Rate",value: result ? `${fmt(result.winrate_pct, 1)}%` : "—",
+            color: result ? (result.winrate_pct >= 50 ? "var(--teal)" : "var(--red)") : undefined },
+          { label: "Net P&L", value: result ? `$${fmt(result.net_pnl)}` : "—",
+            color: result ? (result.net_pnl >= 0 ? "var(--teal)" : "var(--red)") : undefined },
+          { label: "Prof. Factor", value: result ? fmt(result.profit_factor) : "—",
+            color: result ? (result.profit_factor >= 1 ? "var(--teal)" : "var(--red)") : undefined },
+        ].map((item, i) => (
+          <div key={item.label} style={{
+            padding: "10px 18px", borderRight: "1px solid var(--border)",
+            minWidth: 80,
+          }}>
+            <p style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 3 }}>{item.label}</p>
+            <p className="num" style={{ fontSize: 14, fontWeight: 700, color: item.color ?? "var(--text)" }}>{item.value}</p>
           </div>
-        </div>
+        ))}
 
-        <div style={{ width: 1, height: 40, background: "var(--border)", flexShrink: 0 }} />
-
-        <div>
-          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--muted)", display: "block", marginBottom: 8, fontWeight: 700 }}>Lookback</label>
-          <div style={{ display: "flex", gap: 5 }}>
-            {LIMITS.map(l => <PillBtn key={l} active={limit === l} onClick={() => setLimit(l)}>{l}d</PillBtn>)}
-          </div>
-        </div>
-
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        {/* Legend */}
+        <div style={{ marginLeft: "auto", padding: "10px 16px", display: "flex", gap: 12, alignItems: "center" }}>
           {[
-            { color: "#10b981", label: "Long" },
-            { color: "#ef4444", label: "Short" },
-            { color: "#3b82f6", label: "TP" },
-            { color: "#f59e0b", label: "SL" },
+            { color: "var(--teal)", label: "Long ▲" },
+            { color: "var(--red)",  label: "Short ▼" },
+            { color: "var(--blue2)",label: "TP ●" },
+            { color: "var(--yellow)",label: "SL ●" },
           ].map(l => (
-            <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6,
-              padding: "4px 10px", borderRadius: 999,
-              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: l.color, boxShadow: `0 0 6px ${l.color}` }} />
+            <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: l.color }} />
               <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600 }}>{l.label}</span>
             </div>
           ))}
@@ -409,67 +390,39 @@ export default function BacktestPage() {
 
       {/* ── Chart ── */}
       <div style={{
-        background: "rgba(255,255,255,0.02)",
-        border: "1px solid var(--border)",
-        borderRadius: 20, padding: "18px 18px 14px",
-        marginBottom: 18, position: "relative",
-        backdropFilter: "blur(20px)",
-        boxShadow: "0 8px 40px rgba(0,0,0,.35)",
+        background: "var(--card)", border: "1px solid var(--border)",
+        borderRadius: 10, padding: "0 0 4px", marginBottom: 14,
+        overflow: "hidden", position: "relative",
       }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <p style={{ fontWeight: 700, fontSize: 14 }}>{symbol}-USDC</p>
-            <span style={{
-              fontSize: 10, padding: "2px 10px", borderRadius: 999, fontWeight: 700,
-              background: "rgba(255,255,255,0.06)", border: "1px solid var(--border)",
-              color: "var(--muted)", letterSpacing: "0.06em",
-            }}>{interval.toUpperCase()}</span>
-            {loading && (
-              <span style={{
-                fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 5,
-              }}>
-                <span style={{ width: 10, height: 10, border: "1.5px solid var(--border2)", borderTopColor: "var(--blue)", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
-                Loading
-              </span>
-            )}
-            {markers.length > 0 && (
-              <span style={{ fontSize: 11, padding: "2px 10px", borderRadius: 999, background: "rgba(59,130,246,.1)", color: "var(--blue2)", border: "1px solid rgba(59,130,246,.2)", fontWeight: 700 }}>
-                {markers.filter(m => m.type === "Entry").length} signals
-              </span>
-            )}
-            {result && longs > 0 && (
-              <span style={{ fontSize: 11, padding: "2px 10px", borderRadius: 999, background: "rgba(16,185,129,.1)", color: "var(--green2)", border: "1px solid rgba(16,185,129,.2)", fontWeight: 700 }}>
-                {longs}↑
-              </span>
-            )}
-            {result && shorts > 0 && (
-              <span style={{ fontSize: 11, padding: "2px 10px", borderRadius: 999, background: "rgba(239,68,68,.1)", color: "var(--red2)", border: "1px solid rgba(239,68,68,.2)", fontWeight: 700 }}>
-                {shorts}↓
-              </span>
-            )}
+        {loading && (
+          <div style={{
+            position: "absolute", top: 10, left: 14, zIndex: 10,
+            display: "flex", alignItems: "center", gap: 6,
+            fontSize: 11, color: "var(--muted)",
+          }}>
+            <span style={{ width: 10, height: 10, border: "1.5px solid var(--border)", borderTopColor: "var(--teal)", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+            Loading…
           </div>
-          <span style={{ fontSize: 11, color: "var(--muted)", opacity: 0.6 }}>{candles.length} candles · Hyperliquid</span>
-        </div>
+        )}
 
         {candles.length > 0 ? (
-          <CandleChart candles={candles} signals={markers} maLine={ma200} maLabel="200 MA" height={480}
+          <CandleChart candles={candles} signals={markers} maLine={ma200} maLabel="200 MA" height={460}
             highlightTrade={highlightTrade} tradeRanges={tradeRanges} onTradeClick={selectTrade} />
         ) : (
-          <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10 }}>
-            <div style={{ width: 36, height: 36, border: "2px solid var(--border)", borderTopColor: "var(--blue)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+          <div style={{ height: 460, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10 }}>
+            <div style={{ width: 32, height: 32, border: "2px solid var(--border)", borderTopColor: "var(--teal)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading chart…</p>
           </div>
         )}
 
         {!running && markers.length === 0 && candles.length > 0 && (
           <div style={{
-            position: "absolute", bottom: 28, left: "50%", transform: "translateX(-50%)",
-            background: "rgba(4,7,15,.85)", border: "1px solid var(--border)",
-            borderRadius: 14, padding: "11px 22px", fontSize: 12, color: "var(--muted)",
-            backdropFilter: "blur(16px)", whiteSpace: "nowrap",
-            boxShadow: "0 8px 32px rgba(0,0,0,.5)",
+            position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
+            background: "rgba(11,14,26,.9)", border: "1px solid var(--border)",
+            borderRadius: 8, padding: "9px 18px", fontSize: 12, color: "var(--muted)",
+            backdropFilter: "blur(12px)", whiteSpace: "nowrap",
           }}>
-            Hit <strong style={{ color: "#fff" }}>▶ Run Backtest</strong> to see signals on the chart
+            Hit <strong style={{ color: "var(--teal)" }}>▶ Run Backtest</strong> to see signals
           </div>
         )}
       </div>
@@ -477,58 +430,32 @@ export default function BacktestPage() {
       {/* ── Results ── */}
       {result && (
         <div className="slide-in">
-
-          {/* quick KPI strip */}
-          <div style={{
-            display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap",
-            padding: "14px 20px",
-            background: "rgba(255,255,255,0.02)",
-            border: "1px solid var(--border)", borderRadius: 18,
-            backdropFilter: "blur(20px)",
-            alignItems: "center",
-          }}>
-            {[
-              { label: "Win Rate",     value: `${fmt(winRate,1)}%`,             ok: winRate >= 50 },
-              { label: "Net P&L",      value: `$${fmt(netPnl)}`,               ok: netPnl  >= 0  },
-              { label: "Total Trades", value: String(result.total_trades),      ok: true          },
-              { label: "Profit Factor",value: fmt(result.profit_factor),        ok: result.profit_factor >= 1 },
-              { label: "Max DD",       value: `${fmt(result.max_drawdown_pct)}%`, ok: result.max_drawdown_pct < 15 },
-            ].map((k, idx) => (
-              <div key={k.label} style={{ display: "flex", alignItems: "center", gap: idx > 0 ? 10 : 0 }}>
-                {idx > 0 && <div style={{ width: 1, height: 28, background: "var(--border)" }} />}
-                <div style={{ paddingLeft: idx > 0 ? 10 : 0 }}>
-                  <p style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 2 }}>{k.label}</p>
-                  <p className="num" style={{ fontSize: 18, fontWeight: 800, color: k.ok ? "var(--green2)" : "var(--red2)", letterSpacing: "-0.02em" }}>{k.value}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
           {/* Tabs */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 14, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", borderRadius: 999, padding: "4px", width: "fit-content" }}>
+          <div style={{
+            display: "flex", gap: 0, marginBottom: 12,
+            background: "var(--card)", border: "1px solid var(--border)",
+            borderRadius: 8, padding: 4, width: "fit-content",
+          }}>
             {(["stats","trades"] as const).map(t => (
               <button key={t} onClick={() => setTab(t)} style={{
-                padding: "7px 22px", borderRadius: 999, fontSize: 12, fontWeight: 700,
-                cursor: "pointer", transition: "all .15s",
-                background: tab === t
-                  ? "linear-gradient(135deg, #3b82f6, #6366f1)"
-                  : "transparent",
-                color: tab === t ? "#fff" : "var(--muted)",
-                border: "none",
-                boxShadow: tab === t ? "0 0 14px rgba(99,102,241,.35)" : "none",
+                padding: "6px 20px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", transition: "all .12s",
+                background: tab === t ? "var(--teal-bg)" : "transparent",
+                color: tab === t ? "var(--teal)" : "var(--muted)",
+                border: tab === t ? "1px solid var(--teal-border)" : "1px solid transparent",
               }}>{t.charAt(0).toUpperCase() + t.slice(1)}</button>
             ))}
           </div>
 
           {tab === "stats" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
                 <StatCard label="Win Rate"      value={`${fmt(result.winrate_pct, 1)}%`}   color={result.winrate_pct >= 50 ? "green" : "red"} glow />
                 <StatCard label="Profit Factor" value={fmt(result.profit_factor)}           color={result.profit_factor >= 1 ? "green" : "red"} />
                 <StatCard label="Max Drawdown"  value={`${fmt(result.max_drawdown_pct)}%`} color={result.max_drawdown_pct > 15 ? "red" : "yellow"} />
                 <StatCard label="Net P&L"       value={`$${fmt(result.net_pnl)}`}          color={result.net_pnl >= 0 ? "green" : "red"} glow />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
                 <StatCard label="Total Trades" value={String(result.total_trades)} sub={`${result.wins}W · ${result.losses}L · ${longs}↑ ${shorts}↓`} />
                 <StatCard label="Avg Win"      value={`$${fmt(result.avg_win)}`}  color="green" />
                 <StatCard label="Avg Loss"     value={`$${fmt(result.avg_loss)}`} color="red" />
@@ -536,25 +463,19 @@ export default function BacktestPage() {
               </div>
 
               {months.length > 0 && (
-                <div style={{
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 20, padding: 20,
-                  backdropFilter: "blur(20px)",
-                }}>
-                  <p style={{ fontWeight: 700, marginBottom: 14, fontSize: 13, letterSpacing: "-0.01em" }}>Monthly Returns</p>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
+                <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
+                  <p style={{ fontWeight: 700, marginBottom: 12, fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Monthly Returns</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 6 }}>
                     {months.map(([month, pnl]) => {
                       const pos = (pnl as number) >= 0;
                       return (
                         <div key={month} style={{
-                          borderRadius: 12, padding: "10px 8px", textAlign: "center",
-                          background: pos ? "rgba(16,185,129,.08)" : "rgba(239,68,68,.08)",
-                          border: `1px solid ${pos ? "rgba(16,185,129,.2)" : "rgba(239,68,68,.2)"}`,
-                          transition: "transform .15s",
+                          borderRadius: 7, padding: "8px 10px", textAlign: "center",
+                          background: pos ? "rgba(0,212,180,.07)" : "rgba(234,57,67,.07)",
+                          border: `1px solid ${pos ? "rgba(0,212,180,.18)" : "rgba(234,57,67,.18)"}`,
                         }}>
-                          <p style={{ fontSize: 9, color: "var(--muted)", marginBottom: 4, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600 }}>{month}</p>
-                          <p className="num" style={{ fontSize: 12, fontWeight: 800, color: pos ? "var(--green2)" : "var(--red2)" }}>
+                          <p style={{ fontSize: 9, color: "var(--muted)", marginBottom: 3, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>{month}</p>
+                          <p className="num" style={{ fontSize: 12, fontWeight: 700, color: pos ? "var(--teal)" : "var(--red)" }}>
                             {pos ? "+" : ""}${fmt(pnl as number, 0)}
                           </p>
                         </div>
@@ -573,13 +494,12 @@ export default function BacktestPage() {
       )}
 
       <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .trade-row-sel td { background: rgba(0,212,180,.06); }
+        tr:not(.trade-row-sel):hover td { background: rgba(255,255,255,.02); }
         @keyframes tradeGlow {
-          0%, 100% { box-shadow: 0 0 12px rgba(239,68,68,.35), inset 0 0 10px rgba(239,68,68,.08); }
-          50%       { box-shadow: 0 0 28px rgba(239,68,68,.75), inset 0 0 18px rgba(239,68,68,.2); }
+          0%, 100% { box-shadow: 0 0 10px rgba(0,212,180,.25); }
+          50%       { box-shadow: 0 0 22px rgba(0,212,180,.55); }
         }
-        .trade-row-glow td { animation: tradeGlow 1.4s ease-in-out infinite; }
-        tr:not(.trade-row-glow):hover td { background: rgba(255,255,255,0.025); }
       `}</style>
     </div>
   );
