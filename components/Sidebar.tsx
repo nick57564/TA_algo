@@ -3,12 +3,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/",          icon: "⬡",  label: "Overview"   },
   { href: "/backtest",  icon: "◈",  label: "Backtest"   },
-  { href: "/signals",   icon: "⚡",  label: "Signals"    },
   { href: "/paper",     icon: "◎",  label: "Paper"      },
   { href: "/live",      icon: "●",  label: "Live"       },
-  { href: "/log",       icon: "≡",  label: "Event Log"  },
 ];
 
 export default function Sidebar() {
@@ -16,7 +13,7 @@ export default function Sidebar() {
 
   return (
     <aside style={{
-      width: 220,
+      width: 260,
       minHeight: "100vh",
       background: "var(--surface)",
       borderRight: "1px solid var(--border)",
@@ -61,11 +58,11 @@ export default function Sidebar() {
             <Link key={href} href={href} style={{ textDecoration: "none" }}>
               <div style={{
                 display: "flex", alignItems: "center", gap: 10,
-                padding: "9px 12px", borderRadius: 8, marginBottom: 2,
+                padding: "12px 16px", borderRadius: 9, marginBottom: 4,
                 background: active ? "rgba(0,212,180,.1)" : "transparent",
                 border: `1px solid ${active ? "rgba(0,212,180,.25)" : "transparent"}`,
                 color: active ? "var(--teal)" : "var(--muted)",
-                fontSize: 13, fontWeight: active ? 600 : 500,
+                fontSize: 14, fontWeight: active ? 700 : 500,
                 transition: "all .15s",
                 cursor: "pointer",
               }}>
