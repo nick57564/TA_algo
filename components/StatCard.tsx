@@ -36,16 +36,16 @@ export default function StatCard({ label, value, sub, color, glow }: StatCardPro
         }} />
       )}
       <p style={{
-        fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em",
+        fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em",
         color: "var(--muted)", marginBottom: 8, fontWeight: 700,
       }}>{label}</p>
       <p className="num" style={{
-        fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em",
+        fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em",
         color: c ? c.text : "var(--text)", lineHeight: 1,
       }}>{value}</p>
       {sub && (
         <p className="num" style={{
-          fontSize: 11, color: "var(--muted)", marginTop: 6,
+          fontSize: 13, color: "var(--muted)", marginTop: 6,
         }}>{sub}</p>
       )}
     </div>

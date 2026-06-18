@@ -45,7 +45,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav style={{ flex: 1, padding: "16px 12px" }}>
-        <p style={{ fontSize: 10, color: "var(--sb-muted)", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, padding: "4px 10px", marginBottom: 8 }}>Trading</p>
+        <p style={{ fontSize: 12, color: "var(--sb-muted)", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, padding: "4px 10px", marginBottom: 8 }}>Trading</p>
         {NAV.map(({ href, icon, label }) => {
           const active = path === href;
           return (
@@ -56,7 +56,7 @@ export default function Sidebar() {
                 background: active ? "var(--sb-active)" : "transparent",
                 border: `1px solid ${active ? "var(--sb-active-border)" : "transparent"}`,
                 color: active ? "var(--teal)" : "var(--sb-muted)",
-                fontSize: 14, fontWeight: active ? 700 : 500,
+                fontSize: 15, fontWeight: active ? 700 : 500,
                 transition: "all .15s", cursor: "pointer",
               }}>
                 <span style={{ fontSize: 16, width: 20, textAlign: "center" }}>{icon}</span>
@@ -87,9 +87,9 @@ export default function Sidebar() {
       <div style={{ padding: "16px 22px", borderTop: "1px solid var(--sb-border)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 6px var(--teal)" }} className="pulse" />
-          <p style={{ fontSize: 11, color: "var(--teal)", fontWeight: 600 }}>Connected · Hyperliquid</p>
+          <p style={{ fontSize: 13, color: "var(--teal)", fontWeight: 600 }}>Connected · Hyperliquid</p>
         </div>
-        <p style={{ fontSize: 10, color: "var(--sb-muted)" }}>Strategy-first approach · v1.0</p>
+        <p style={{ fontSize: 12, color: "var(--sb-muted)" }}>Strategy-first approach · v1.0</p>
       </div>
     </aside>
   );

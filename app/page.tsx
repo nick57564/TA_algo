@@ -21,8 +21,8 @@ function InfoRow({ label, value, color }: { label: string; value: string; color?
       display: "flex", justifyContent: "space-between", alignItems: "center",
       padding: "10px 0", borderBottom: "1px solid var(--border)",
     }}>
-      <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{label}</span>
-      <span style={{ fontSize: 13, fontWeight: 700, color: color ?? "var(--text)" }}>{value}</span>
+      <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 600 }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 700, color: color ?? "var(--text)" }}>{value}</span>
     </div>
   );
 }
@@ -82,14 +82,14 @@ export default function Overview() {
           <div className="pulse" style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 8px var(--teal)", flexShrink: 0 }} />
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>Overview</h1>
-            <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 1 }}>BTCUSD Structure Bot · Hyperliquid</p>
+            <p style={{ color: "var(--muted)", fontSize: 14, marginTop: 1 }}>BTCUSD Structure Bot · Hyperliquid</p>
           </div>
         </div>
         {btcPrice && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 18px",
             background: "#fff", border: "1px solid var(--border)", borderRadius: 9,
             boxShadow: "0 1px 3px rgba(0,0,0,.05)" }}>
-            <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em" }}>BTC-USDC</span>
+            <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em" }}>BTC-USDC</span>
             <span style={{ fontSize: 18, fontWeight: 800, color: "var(--teal)", letterSpacing: "-0.02em" }} className="num">
               ${btcPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span>
@@ -114,15 +114,15 @@ export default function Overview() {
 
         {/* ── Left: Strategy rules ── */}
         <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px" }}>
-          <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, letterSpacing: "-0.01em" }}>Strategy Rules</p>
-          <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 14 }}>Live parameters driving every signal</p>
+          <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 4, letterSpacing: "-0.01em" }}>Strategy Rules</p>
+          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>Live parameters driving every signal</p>
           {STRATEGY.map(({ label, value, note }) => (
             <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "9px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
               <div>
-                <p style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{label}</p>
-                <p style={{ fontSize: 11, color: "var(--muted)", opacity: 0.6, marginTop: 1 }}>{note}</p>
+                <p style={{ fontSize: 14, color: "var(--muted)", fontWeight: 600 }}>{label}</p>
+                <p style={{ fontSize: 13, color: "var(--muted)", opacity: 0.6, marginTop: 1 }}>{note}</p>
               </div>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--teal)", letterSpacing: "-0.01em", textAlign: "right" }}>{value}</span>
+              <span style={{ fontSize: 15, fontWeight: 700, color: "var(--teal)", letterSpacing: "-0.01em", textAlign: "right" }}>{value}</span>
             </div>
           ))}
         </div>
@@ -135,12 +135,12 @@ export default function Overview() {
             <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                 <div>
-                  <p style={{ fontWeight: 700, fontSize: 13 }}>Last Backtest</p>
-                  <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                  <p style={{ fontWeight: 700, fontSize: 15 }}>Last Backtest</p>
+                  <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>
                     {backtest.symbol} · {new Date(backtest.ts).toLocaleString()}
                   </p>
                 </div>
-                <a href="/backtest" style={{ fontSize: 12, color: "var(--teal)", textDecoration: "none", fontWeight: 600 }}>View full →</a>
+                <a href="/backtest" style={{ fontSize: 14, color: "var(--teal)", textDecoration: "none", fontWeight: 600 }}>View full →</a>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 14 }}>
                 <StatCard label="Win Rate"      value={`${backtest.winrate_pct}%`}      color={backtest.winrate_pct >= 50 ? "green" : "red"} />
@@ -152,11 +152,11 @@ export default function Overview() {
             </div>
           ) : (
             <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "28px 20px", textAlign: "center" }}>
-              <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>No backtest results yet</p>
+              <p style={{ fontSize: 15, color: "var(--muted)", marginBottom: 8 }}>No backtest results yet</p>
               <a href="/backtest" style={{
                 display: "inline-block", padding: "8px 20px", borderRadius: 7,
                 background: "var(--teal-bg)", border: "1px solid var(--teal-border)",
-                color: "var(--teal)", fontSize: 13, fontWeight: 700, textDecoration: "none",
+                color: "var(--teal)", fontSize: 15, fontWeight: 700, textDecoration: "none",
               }}>Run Backtest →</a>
             </div>
           )}
@@ -164,14 +164,14 @@ export default function Overview() {
           {/* Recent events */}
           <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px", flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <p style={{ fontWeight: 700, fontSize: 13 }}>Recent Events</p>
-              <a href="/log" style={{ fontSize: 12, color: "var(--teal)", textDecoration: "none", fontWeight: 600 }}>View all →</a>
+              <p style={{ fontWeight: 700, fontSize: 15 }}>Recent Events</p>
+              <a href="/log" style={{ fontSize: 14, color: "var(--teal)", textDecoration: "none", fontWeight: 600 }}>View all →</a>
             </div>
             {events.length === 0 ? (
               <div style={{ padding: "24px 0", textAlign: "center" }}>
                 <p style={{ fontSize: 30, marginBottom: 8, opacity: 0.2 }}>📡</p>
-                <p style={{ color: "var(--muted)", fontSize: 13 }}>No events yet</p>
-                <p style={{ color: "var(--muted)", fontSize: 11, marginTop: 4, opacity: 0.7 }}>Run the bot to see activity here</p>
+                <p style={{ color: "var(--muted)", fontSize: 15 }}>No events yet</p>
+                <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4, opacity: 0.7 }}>Run the bot to see activity here</p>
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -181,13 +181,13 @@ export default function Overview() {
                     padding: "8px 10px", borderRadius: 7,
                     background: "rgba(255,255,255,0.03)",
                   }}>
-                    <span style={{ color: KIND_COLOR[e.kind] ?? "var(--muted)", fontSize: 12, marginTop: 1, width: 14, flexShrink: 0 }}>
+                    <span style={{ color: KIND_COLOR[e.kind] ?? "var(--muted)", fontSize: 14, marginTop: 1, width: 14, flexShrink: 0 }}>
                       {KIND_ICON[e.kind] ?? "·"}
                     </span>
-                    <span className="num" style={{ color: "var(--muted)", fontSize: 10, marginTop: 2, whiteSpace: "nowrap", flexShrink: 0 }}>
+                    <span className="num" style={{ color: "var(--muted)", fontSize: 12, marginTop: 2, whiteSpace: "nowrap", flexShrink: 0 }}>
                       {new Date(e.ts).toLocaleTimeString()}
                     </span>
-                    <span style={{ color: "var(--text)", fontSize: 12, lineHeight: 1.4 }}>{e.message}</span>
+                    <span style={{ color: "var(--text)", fontSize: 14, lineHeight: 1.4 }}>{e.message}</span>
                   </div>
                 ))}
               </div>
@@ -198,7 +198,7 @@ export default function Overview() {
 
       {/* ── Bottom: Pattern guide ── */}
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px" }}>
-        <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Detected Patterns</p>
+        <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>Detected Patterns</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
           {[
             { name: "Head & Shoulders",     dir: "Short", type: "Structure" },
@@ -221,15 +221,15 @@ export default function Overview() {
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                 <span style={{
-                  fontSize: 9, padding: "1px 6px", borderRadius: 4, fontWeight: 700,
+                  fontSize: 11, padding: "1px 6px", borderRadius: 4, fontWeight: 700,
                   letterSpacing: "0.05em", textTransform: "uppercase",
                   background: p.dir === "Long" ? "rgba(0,212,180,.12)" : "rgba(234,57,67,.12)",
                   color: p.dir === "Long" ? "var(--teal)" : "var(--red)",
                   border: `1px solid ${p.dir === "Long" ? "rgba(0,212,180,.2)" : "rgba(234,57,67,.2)"}`,
                 }}>{p.dir}</span>
-                <span style={{ fontSize: 9, color: "var(--muted)", fontWeight: 600 }}>{p.type}</span>
+                <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{p.type}</span>
               </div>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>{p.name}</p>
+              <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>{p.name}</p>
             </div>
           ))}
         </div>

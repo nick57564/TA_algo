@@ -20,7 +20,7 @@ const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button onClick={onClick} style={{
-      padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600,
+      padding: "9px 18px", borderRadius: 8, fontSize: 15, fontWeight: 600,
       cursor: "pointer", transition: "all .12s",
       background: active ? "var(--teal)" : "#ffffff",
       color: active ? "#ffffff" : "var(--muted)",
@@ -50,7 +50,7 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
         borderRadius: 14, boxShadow: "0 1px 3px rgba(0,0,0,.05)",
       }}>
         <p style={{ fontSize: 32, marginBottom: 8, opacity: 0.25 }}>📊</p>
-        <p style={{ fontSize: 13 }}>Run backtest to see trades</p>
+        <p style={{ fontSize: 15 }}>Run backtest to see trades</p>
       </div>
     );
 
@@ -144,17 +144,17 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
                         border: `1px solid ${win ? "rgba(0,200,150,.2)" : "rgba(234,57,67,.2)"}`,
                         borderRadius: 10, padding: "14px 18px",
                       }}>
-                        <p style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase",
+                        <p style={{ fontSize: 13, fontWeight: 800, textTransform: "uppercase",
                           letterSpacing: "0.1em", color: win ? "var(--teal)" : "var(--red)", marginBottom: 6 }}>
                           {win ? "✓ Why it worked" : "✗ Why it failed"}
                         </p>
-                        <p style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.7 }}>{t.analysis ?? "—"}</p>
+                        <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.7 }}>{t.analysis ?? "—"}</p>
                         <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
                           {[`SL @ $${t.sl_price?.toFixed(0)}`, `TP @ $${t.tp_price?.toFixed(0)}`,
                             `Hold: ${Math.round((new Date(t.exit_time).getTime() - new Date(t.entry_time).getTime()) / 3_600_000)}h`
                           ].map(s => (
                             <span key={s} style={{
-                              fontSize: 10, color: "var(--muted)", padding: "2px 10px",
+                              fontSize: 13, color: "var(--muted)", padding: "2px 10px",
                               borderRadius: 5, background: "var(--dim)", border: "1px solid var(--border)",
                             }}>{s}</span>
                           ))}
@@ -257,7 +257,7 @@ export default function BacktestPage() {
           <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" }}>
             Strategy Backtest
           </h1>
-          <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 3 }}>Pattern recognition · Hyperliquid</p>
+          <p style={{ fontSize: 15, color: "var(--muted)", marginTop: 3 }}>Pattern recognition · Hyperliquid</p>
         </div>
 
         {/* Symbol */}
@@ -293,7 +293,7 @@ export default function BacktestPage() {
       </div>
 
       {runErr && (
-        <div style={{ background: "rgba(234,57,67,.06)", border: "1px solid rgba(234,57,67,.2)", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 12, color: "var(--red)" }}>⚠ {runErr}</div>
+        <div style={{ background: "rgba(234,57,67,.06)", border: "1px solid rgba(234,57,67,.2)", borderRadius: 10, padding: "10px 16px", marginBottom: 16, fontSize: 14, color: "var(--red)" }}>⚠ {runErr}</div>
       )}
 
       {/* ── Data strip ── */}
@@ -333,7 +333,7 @@ export default function BacktestPage() {
           {[{ c: "var(--teal)", l: "Long" }, { c: "var(--red)", l: "Short" }, { c: "var(--blue)", l: "TP" }, { c: "var(--yellow)", l: "SL" }].map(x => (
             <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <div style={{ width: 7, height: 7, borderRadius: "50%", background: x.c }} />
-              <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
+              <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
             </div>
           ))}
         </div>
@@ -346,7 +346,7 @@ export default function BacktestPage() {
         boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.05)",
       }}>
         {loading && (
-          <div style={{ position: "absolute", top: 12, left: 16, zIndex: 10, display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)" }}>
+          <div style={{ position: "absolute", top: 12, left: 16, zIndex: 10, display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: "var(--muted)" }}>
             <span style={{ width: 11, height: 11, border: "2px solid var(--border)", borderTopColor: "var(--teal)", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />Loading…
           </div>
         )}
@@ -356,11 +356,11 @@ export default function BacktestPage() {
         ) : (
           <div style={{ height: 460, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10 }}>
             <div style={{ width: 32, height: 32, border: "3px solid var(--border)", borderTopColor: "var(--teal)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-            <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading chart…</p>
+            <p style={{ color: "var(--muted)", fontSize: 15 }}>Loading chart…</p>
           </div>
         )}
         {!running && markers.length === 0 && candles.length > 0 && (
-          <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", background: "rgba(255,255,255,.95)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 20px", fontSize: 13, color: "var(--muted)", whiteSpace: "nowrap", boxShadow: "0 4px 16px rgba(0,0,0,.1)" }}>
+          <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", background: "rgba(255,255,255,.95)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 20px", fontSize: 15, color: "var(--muted)", whiteSpace: "nowrap", boxShadow: "0 4px 16px rgba(0,0,0,.1)" }}>
             Hit <strong style={{ color: "var(--teal)" }}>▶ Run Backtest</strong> to see signals
           </div>
         )}
@@ -372,7 +372,7 @@ export default function BacktestPage() {
           <div style={{ display: "flex", gap: 4, marginBottom: 14, background: "#fff", border: "1px solid var(--border)", borderRadius: 10, padding: 4, width: "fit-content", boxShadow: "0 1px 3px rgba(0,0,0,.05)" }}>
             {(["stats","trades"] as const).map(t => (
               <button key={t} onClick={() => setTab(t)} style={{
-                padding: "7px 22px", borderRadius: 7, fontSize: 13, fontWeight: 700,
+                padding: "8px 24px", borderRadius: 7, fontSize: 15, fontWeight: 700,
                 cursor: "pointer", transition: "all .12s",
                 background: tab === t ? "var(--teal)" : "transparent",
                 color: tab === t ? "#fff" : "var(--muted)", border: "none",
@@ -397,7 +397,7 @@ export default function BacktestPage() {
               </div>
               {months.length > 0 && (
                 <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 14, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.05)" }}>
-                  <p style={{ fontWeight: 700, marginBottom: 14, fontSize: 13, color: "var(--text)" }}>Monthly Returns</p>
+                  <p style={{ fontWeight: 700, marginBottom: 14, fontSize: 15, color: "var(--text)" }}>Monthly Returns</p>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(95px, 1fr))", gap: 8 }}>
                     {months.map(([month, pnl]) => {
                       const pos = (pnl as number) >= 0;
@@ -407,8 +407,8 @@ export default function BacktestPage() {
                           background: pos ? "rgba(0,200,150,.07)" : "rgba(234,57,67,.07)",
                           border: `1px solid ${pos ? "rgba(0,200,150,.2)" : "rgba(234,57,67,.2)"}`,
                         }}>
-                          <p style={{ fontSize: 9, color: "var(--muted)", marginBottom: 4, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>{month}</p>
-                          <p className="num" style={{ fontSize: 13, fontWeight: 800, color: pos ? "var(--teal)" : "var(--red)" }}>
+                          <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>{month}</p>
+                          <p className="num" style={{ fontSize: 15, fontWeight: 800, color: pos ? "var(--teal)" : "var(--red)" }}>
                             {pos ? "+" : ""}${fmt(pnl as number, 0)}
                           </p>
                         </div>
