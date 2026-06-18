@@ -20,7 +20,7 @@ const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button onClick={onClick} style={{
-      padding: "6px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+      padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600,
       cursor: "pointer", transition: "all .12s",
       background: active ? "var(--teal)" : "#ffffff",
       color: active ? "#ffffff" : "var(--muted)",
@@ -60,13 +60,13 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
       borderRadius: 14, overflow: "hidden",
       boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.05)",
     }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--dim)" }}>
             {["","#","Side","Entry","Exit","Entry $","Exit $","P&L","Result","Pattern"].map(h => (
               <th key={h} style={{
                 padding: "11px 14px", textAlign: "left",
-                color: "var(--muted)", fontWeight: 700, fontSize: 10,
+                color: "var(--muted)", fontWeight: 700, fontSize: 12,
                 textTransform: "uppercase", letterSpacing: "0.08em",
               }}>{h}</th>
             ))}
@@ -88,33 +88,33 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
                     outline: sel ? "2px solid rgba(0,200,150,.4)" : "none",
                     outlineOffset: sel ? -2 : 0,
                   }}>
-                  <td style={{ padding: "10px 8px 10px 14px", color: "var(--muted)", fontSize: 11 }}>{sel ? "▼" : "▶"}</td>
+                  <td style={{ padding: "10px 8px 10px 14px", color: "var(--muted)", fontSize: 13 }}>{sel ? "▼" : "▶"}</td>
                   <td style={{ padding: "10px 8px", color: "var(--muted)", fontWeight: 600 }}>{i + 1}</td>
                   <td style={{ padding: "10px 8px" }}>
                     <span style={{
-                      padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                      padding: "3px 9px", borderRadius: 6, fontSize: 13, fontWeight: 700,
                       background: isLong ? "rgba(0,200,150,.1)" : "rgba(234,57,67,.1)",
                       color: isLong ? "var(--teal)" : "var(--red)",
                       border: `1px solid ${isLong ? "rgba(0,200,150,.25)" : "rgba(234,57,67,.25)"}`,
                     }}>{isLong ? "LONG" : "SHORT"}</span>
                   </td>
-                  <td style={{ padding: "10px 8px", color: "var(--muted)", fontSize: 11 }}>
+                  <td style={{ padding: "10px 8px", color: "var(--muted)", fontSize: 13 }}>
                     {new Date(t.entry_time).toLocaleDateString()}
                     <span style={{ opacity: 0.6 }}> {new Date(t.entry_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   </td>
-                  <td style={{ padding: "10px 8px", color: "var(--muted)", fontSize: 11 }}>
+                  <td style={{ padding: "10px 8px", color: "var(--muted)", fontSize: 13 }}>
                     {new Date(t.exit_time).toLocaleDateString()}
                     <span style={{ opacity: 0.6 }}> {new Date(t.exit_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   </td>
                   <td style={{ padding: "10px 8px", fontWeight: 600, color: "var(--text)" }}>${t.entry_price?.toLocaleString()}</td>
                   <td style={{ padding: "10px 8px", fontWeight: 600, color: "var(--text)" }}>${t.exit_price?.toLocaleString()}</td>
-                  <td style={{ padding: "10px 8px", fontWeight: 800, fontSize: 13,
+                  <td style={{ padding: "10px 8px", fontWeight: 800, fontSize: 15,
                     color: win ? "var(--teal)" : "var(--red)" }}>
                     {win ? "+" : ""}${t.pnl?.toFixed(2)}
                   </td>
                   <td style={{ padding: "10px 8px" }}>
                     <span style={{
-                      padding: "3px 9px", borderRadius: 6, fontSize: 10, fontWeight: 700,
+                      padding: "3px 9px", borderRadius: 6, fontSize: 12, fontWeight: 700,
                       background: win ? "rgba(0,200,150,.1)"
                         : t.exit_reason === "be"  ? "rgba(37,99,235,.08)"
                         : t.exit_reason === "eod" ? "rgba(107,122,150,.08)"
@@ -131,7 +131,7 @@ function TradesTable({ trades, selectedIdx, onSelect }: {
                       {t.exit_reason === "be" ? "BE" : t.exit_reason?.toUpperCase()}
                     </span>
                   </td>
-                  <td style={{ padding: "10px 8px", fontSize: 11, color: "var(--muted)",
+                  <td style={{ padding: "10px 8px", fontSize: 13, color: "var(--muted)",
                     maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {t.entry_reason}
                   </td>
@@ -254,10 +254,10 @@ export default function BacktestPage() {
       {/* ── Header ── */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
         <div style={{ marginRight: 4 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" }}>
+          <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" }}>
             Strategy Backtest
           </h1>
-          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>Pattern recognition · Hyperliquid</p>
+          <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 3 }}>Pattern recognition · Hyperliquid</p>
         </div>
 
         {/* Symbol */}
@@ -277,7 +277,7 @@ export default function BacktestPage() {
 
         <div style={{ marginLeft: "auto" }}>
           <button onClick={runBacktest} disabled={running} style={{
-            padding: "11px 28px", borderRadius: 10, fontSize: 14, fontWeight: 700,
+            padding: "12px 32px", borderRadius: 10, fontSize: 15, fontWeight: 700,
             cursor: running ? "not-allowed" : "pointer",
             background: running ? "var(--dim)" : "var(--teal)",
             color: running ? "var(--muted)" : "#ffffff",
@@ -306,8 +306,8 @@ export default function BacktestPage() {
         {/* Symbol badge */}
         <div style={{ padding: "14px 22px", borderRight: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, background: "rgba(0,200,150,.04)" }}>
           <div style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--teal)" }} className="pulse" />
-          <span style={{ fontWeight: 800, fontSize: 15, color: "var(--text)" }}>{symbol}-USDC</span>
-          <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, background: "rgba(0,200,150,.12)", border: "1px solid rgba(0,200,150,.25)", color: "var(--teal)", fontWeight: 700 }}>{interval.toUpperCase()}</span>
+          <span style={{ fontWeight: 800, fontSize: 18, color: "var(--text)" }}>{symbol}-USDC</span>
+          <span style={{ fontSize: 13, padding: "2px 8px", borderRadius: 6, background: "rgba(0,200,150,.12)", border: "1px solid rgba(0,200,150,.25)", color: "var(--teal)", fontWeight: 700 }}>{interval.toUpperCase()}</span>
         </div>
 
         {[
@@ -323,8 +323,8 @@ export default function BacktestPage() {
             color: result ? (result.profit_factor >= 1 ? "var(--teal)" : "var(--red)") : undefined },
         ].map(item => (
           <div key={item.label} style={{ padding: "14px 20px", borderRight: "1px solid var(--border)", minWidth: 90 }}>
-            <p style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>{item.label}</p>
-            <p className="num" style={{ fontSize: 16, fontWeight: 700, color: item.color ?? "var(--text)" }}>{item.value}</p>
+            <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>{item.label}</p>
+            <p className="num" style={{ fontSize: 18, fontWeight: 700, color: item.color ?? "var(--text)" }}>{item.value}</p>
           </div>
         ))}
 
