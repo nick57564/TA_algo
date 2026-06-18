@@ -28,17 +28,27 @@ export default function Sidebar() {
       height: "100vh",
     }}>
       {/* Logo */}
-      <div style={{ padding: "24px 20px 20px", borderBottom: "1px solid var(--border)" }}>
+      <div style={{ padding: "20px 18px 18px", borderBottom: "1px solid var(--border)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: "linear-gradient(135deg, #3b82f6, #8b5cf6)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 14, fontWeight: 700, color: "#fff",
-          }}>B</div>
+          {/* Support / Resistance breakout icon */}
+          <svg viewBox="0 0 46 36" width="46" height="36" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
+            <rect width="46" height="36" rx="7" fill="#0f1320"/>
+            {/* Support line 1 — bottom */}
+            <line x1="2" y1="30" x2="20" y2="30" stroke="#00d4b4" strokeWidth="2.2" strokeLinecap="round" opacity="0.75"/>
+            {/* Middle resistance → support */}
+            <line x1="14" y1="19" x2="42" y2="19" stroke="#00d4b4" strokeWidth="2.2" strokeLinecap="round" opacity="0.75"/>
+            {/* Top resistance */}
+            <line x1="30" y1="8"  x2="46" y2="8"  stroke="#00d4b4" strokeWidth="2.2" strokeLinecap="round" opacity="0.75"/>
+            {/* Price path */}
+            <polyline
+              points="3,33 6,21 9,30 13,21 16,25 18,19 23,12 27,19 31,12 36,7 40,4"
+              fill="none" stroke="#ffffff" strokeWidth="1.6"
+              strokeLinecap="round" strokeLinejoin="round"
+            />
+          </svg>
           <div>
-            <p style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>TA Algo</p>
-            <p style={{ fontSize: 10, color: "var(--muted)" }}>BTCUSD Structure</p>
+            <p style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.01em" }}>TA Algo</p>
+            <p style={{ fontSize: 10, color: "var(--muted)" }}>Structure Bot</p>
           </div>
         </div>
       </div>
@@ -52,9 +62,9 @@ export default function Sidebar() {
               <div style={{
                 display: "flex", alignItems: "center", gap: 10,
                 padding: "9px 12px", borderRadius: 8, marginBottom: 2,
-                background: active ? "rgba(59,130,246,.12)" : "transparent",
-                border: `1px solid ${active ? "rgba(59,130,246,.25)" : "transparent"}`,
-                color: active ? "var(--blue2)" : "var(--muted)",
+                background: active ? "rgba(0,212,180,.1)" : "transparent",
+                border: `1px solid ${active ? "rgba(0,212,180,.25)" : "transparent"}`,
+                color: active ? "var(--teal)" : "var(--muted)",
                 fontSize: 13, fontWeight: active ? 600 : 400,
                 transition: "all .15s",
                 cursor: "pointer",
