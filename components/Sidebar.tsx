@@ -65,7 +65,7 @@ export default function Sidebar() {
                 background: active ? "rgba(0,212,180,.1)" : "transparent",
                 border: `1px solid ${active ? "rgba(0,212,180,.25)" : "transparent"}`,
                 color: active ? "var(--teal)" : "var(--muted)",
-                fontSize: 13, fontWeight: active ? 600 : 400,
+                fontSize: 13, fontWeight: active ? 600 : 500,
                 transition: "all .15s",
                 cursor: "pointer",
               }}>

@@ -20,7 +20,7 @@ const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button onClick={onClick} style={{
-      padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+      padding: "6px 14px", borderRadius: 7, fontSize: 13, fontWeight: 600,
       cursor: "pointer", transition: "all .12s",
       background: active ? "var(--teal-bg)" : "transparent",
       color: active ? "var(--teal)" : "var(--muted)",
@@ -266,36 +266,36 @@ export default function BacktestPage() {
         <div style={{ marginRight: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 8px var(--teal)", display: "inline-block" }} className="pulse" />
-            <span style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600 }}>Live · Hyperliquid</span>
+            <span style={{ fontSize: 11, color: "var(--muted)", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600 }}>Live · Hyperliquid</span>
           </div>
-          <h1 style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" }}>
             Strategy <span style={{ color: "var(--teal)" }}>Backtest</span>
           </h1>
         </div>
 
         {/* Symbol pills */}
         <div style={{
-          display: "flex", gap: 4, flexWrap: "wrap",
-          padding: "6px 10px", background: "var(--card)",
-          border: "1px solid var(--border)", borderRadius: 8,
+          display: "flex", gap: 5, flexWrap: "wrap",
+          padding: "7px 12px", background: "var(--card)",
+          border: "1px solid var(--border)", borderRadius: 9,
         }}>
           {SYMBOLS.map(s => <SegBtn key={s} active={symbol === s} onClick={() => setSymbol(s)}>{s}</SegBtn>)}
         </div>
 
         {/* Timeframe pills */}
         <div style={{
-          display: "flex", gap: 4,
-          padding: "6px 10px", background: "var(--card)",
-          border: "1px solid var(--border)", borderRadius: 8,
+          display: "flex", gap: 5,
+          padding: "7px 12px", background: "var(--card)",
+          border: "1px solid var(--border)", borderRadius: 9,
         }}>
           {INTERVALS.map(iv => <SegBtn key={iv.value} active={interval === iv.value} onClick={() => setInterval(iv.value)}>{iv.label}</SegBtn>)}
         </div>
 
         {/* Lookback pills */}
         <div style={{
-          display: "flex", gap: 4,
-          padding: "6px 10px", background: "var(--card)",
-          border: "1px solid var(--border)", borderRadius: 8,
+          display: "flex", gap: 5,
+          padding: "7px 12px", background: "var(--card)",
+          border: "1px solid var(--border)", borderRadius: 9,
         }}>
           {LIMITS.map(l => <SegBtn key={l} active={limit === l} onClick={() => setLimit(l)}>{l}d</SegBtn>)}
         </div>
@@ -303,7 +303,7 @@ export default function BacktestPage() {
         {/* Run button — far right */}
         <div style={{ marginLeft: "auto" }}>
           <button onClick={runBacktest} disabled={running} style={{
-            padding: "9px 24px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+            padding: "10px 28px", borderRadius: 8, fontSize: 14, fontWeight: 700,
             cursor: running ? "not-allowed" : "pointer",
             background: running ? "var(--dim)" : "var(--teal)",
             color: running ? "var(--muted)" : "#0b0e1a",
@@ -337,16 +337,16 @@ export default function BacktestPage() {
       }}>
         {/* Symbol badge */}
         <div style={{
-          padding: "10px 18px", borderRight: "1px solid var(--border)",
-          display: "flex", alignItems: "center", gap: 8,
+          padding: "12px 20px", borderRight: "1px solid var(--border)",
+          display: "flex", alignItems: "center", gap: 10,
           background: "rgba(0,212,180,.05)",
         }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--teal)" }} />
-          <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: "-0.01em" }}>{symbol}-USDC</span>
+          <div style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 6px var(--teal)" }} />
+          <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: "-0.01em" }}>{symbol}-USDC</span>
           <span style={{
-            fontSize: 10, padding: "1px 6px", borderRadius: 4,
+            fontSize: 11, padding: "2px 8px", borderRadius: 5,
             background: "var(--teal-bg)", border: "1px solid var(--teal-border)",
-            color: "var(--teal)", fontWeight: 700, letterSpacing: "0.06em",
+            color: "var(--teal)", fontWeight: 700, letterSpacing: "0.05em",
           }}>{interval.toUpperCase()}</span>
         </div>
 
@@ -362,13 +362,13 @@ export default function BacktestPage() {
             color: result ? (result.net_pnl >= 0 ? "var(--teal)" : "var(--red)") : undefined },
           { label: "Prof. Factor", value: result ? fmt(result.profit_factor) : "—",
             color: result ? (result.profit_factor >= 1 ? "var(--teal)" : "var(--red)") : undefined },
-        ].map((item, i) => (
+        ].map((item) => (
           <div key={item.label} style={{
-            padding: "10px 18px", borderRight: "1px solid var(--border)",
-            minWidth: 80,
+            padding: "12px 20px", borderRight: "1px solid var(--border)",
+            minWidth: 90,
           }}>
-            <p style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 600, marginBottom: 3 }}>{item.label}</p>
-            <p className="num" style={{ fontSize: 14, fontWeight: 700, color: item.color ?? "var(--text)" }}>{item.value}</p>
+            <p style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>{item.label}</p>
+            <p className="num" style={{ fontSize: 16, fontWeight: 700, color: item.color ?? "var(--text)" }}>{item.value}</p>
           </div>
         ))}
 
