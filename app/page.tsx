@@ -87,7 +87,8 @@ export default function Overview() {
         </div>
         {btcPrice && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 18px",
-            background: "var(--card)", border: "1px solid var(--border)", borderRadius: 9 }}>
+            background: "#fff", border: "1px solid var(--border)", borderRadius: 9,
+            boxShadow: "0 1px 3px rgba(0,0,0,.05)" }}>
             <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em" }}>BTC-USDC</span>
             <span style={{ fontSize: 18, fontWeight: 800, color: "var(--teal)", letterSpacing: "-0.02em" }} className="num">
               ${btcPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -112,7 +113,7 @@ export default function Overview() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
 
         {/* ── Left: Strategy rules ── */}
-        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 20px" }}>
+        <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px" }}>
           <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, letterSpacing: "-0.01em" }}>Strategy Rules</p>
           <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 14 }}>Live parameters driving every signal</p>
           {STRATEGY.map(({ label, value, note }) => (
@@ -131,7 +132,7 @@ export default function Overview() {
 
           {/* Backtest results */}
           {backtest ? (
-            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 20px" }}>
+            <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                 <div>
                   <p style={{ fontWeight: 700, fontSize: 13 }}>Last Backtest</p>
@@ -150,7 +151,7 @@ export default function Overview() {
               {backtest.equity_curve?.length > 1 && <EquityChart points={backtest.equity_curve} height={110} />}
             </div>
           ) : (
-            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "28px 20px", textAlign: "center" }}>
+            <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "28px 20px", textAlign: "center" }}>
               <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>No backtest results yet</p>
               <a href="/backtest" style={{
                 display: "inline-block", padding: "8px 20px", borderRadius: 7,
@@ -161,7 +162,7 @@ export default function Overview() {
           )}
 
           {/* Recent events */}
-          <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 20px", flex: 1 }}>
+          <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px", flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <p style={{ fontWeight: 700, fontSize: 13 }}>Recent Events</p>
               <a href="/log" style={{ fontSize: 12, color: "var(--teal)", textDecoration: "none", fontWeight: 600 }}>View all →</a>
@@ -196,7 +197,7 @@ export default function Overview() {
       </div>
 
       {/* ── Bottom: Pattern guide ── */}
-      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 20px" }}>
+      <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04)", padding: "18px 20px" }}>
         <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Detected Patterns</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
           {[
