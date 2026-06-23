@@ -3,10 +3,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/backtest",     icon: "◈", label: "Backtest"     },
-  { href: "/backtestloop", icon: "⟳", label: "Optimised"    },
-  { href: "/paper",        icon: "◎", label: "Paper"        },
-  { href: "/live",         icon: "●", label: "Live"         },
+  { href: "/backtest", icon: "◈", label: "Backtest" },
+  { href: "/paper",    icon: "◎", label: "Paper"    },
+  { href: "/live",     icon: "●", label: "Live"     },
 ];
 
 export default function Sidebar() {
