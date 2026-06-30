@@ -3,6 +3,12 @@ import { useEffect, useState } from "react";
 import StatCard from "@/components/StatCard";
 import EquityChart from "@/components/EquityChart";
 
+interface LogEntry {
+  ts: number;
+  type: "trend" | "pattern" | "skip" | "wait" | "entry" | "exit" | "info";
+  msg: string;
+}
+
 interface PaperAccount {
   balance: number;
   equity: number;
@@ -15,6 +21,7 @@ interface PaperAccount {
   last_run?: string;
   started_at?: string;
   initializing?: boolean;
+  signal_log?: LogEntry[];
   position?: {
     direction: "long" | "short";
     size: number;
@@ -234,6 +241,43 @@ export default function PaperPage() {
                 The strategy checks for entries every hour. A trade will appear here when all conditions align:<br />
                 price above/below 200 MA · pattern detected · RSI + volume confirmation.
               </p>
+            </div>
+          )}
+
+          {/* Signal Log */}
+          {(account.signal_log?.length ?? 0) > 0 && (
+            <div style={{ background: "#0d1117", border: "1px solid #21262d", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}>
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#3fb950", boxShadow: "0 0 6px #3fb950" }} className="pulse" />
+                <p style={{ fontWeight: 700, fontSize: 14, color: "#e6edf3" }}>Live Signal Log</p>
+                <span style={{ marginLeft: "auto", fontSize: 12, color: "#8b949e" }}>newest first · updates every 15s</span>
+              </div>
+              <div style={{ padding: "12px 0", maxHeight: 480, overflowY: "auto", fontFamily: "monospace" }}>
+                {account.signal_log!.map((entry, idx) => {
+                  const colors: Record<string, string> = {
+                    trend:   "#8b949e",
+                    pattern: "#d2a8ff",
+                    skip:    "#6e7681",
+                    wait:    "#e3b341",
+                    entry:   "#3fb950",
+                    exit:    "#f78166",
+                    info:    "#58a6ff",
+                  };
+                  const color = colors[entry.type] ?? "#e6edf3";
+                  const date = new Date(entry.ts);
+                  const timeStr = date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) + " " + date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+                  return (
+                    <div key={idx} style={{
+                      display: "flex", gap: 12, padding: "7px 20px",
+                      borderBottom: "1px solid #161b22",
+                      opacity: entry.type === "skip" ? 0.5 : 1,
+                    }}>
+                      <span style={{ color: "#484f58", fontSize: 12, flexShrink: 0, paddingTop: 1 }}>{timeStr}</span>
+                      <span style={{ color, fontSize: 13, lineHeight: 1.5 }}>{entry.msg}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 

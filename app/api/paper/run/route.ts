@@ -176,12 +176,19 @@ interface PaperTrade {
   extremePrice: number;
 }
 
+export interface LogEntry {
+  ts: number;          // unix ms
+  type: "trend" | "pattern" | "skip" | "wait" | "entry" | "exit" | "info";
+  msg: string;
+}
+
 interface PaperState {
   startedAt: number;
   initialBalance: number;
   balance: number;
   trades: PaperTrade[];
   lastRun: number;
+  signalLog?: LogEntry[];
 }
 
 export async function POST() {
@@ -193,6 +200,8 @@ export async function POST() {
   const MAX_DIST_MA = 0.10;
   const MAX_DIST_MA_STRUCT = 0.18;
 
+  const fmt2 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+
   try {
     // Load paper state from Redis
     const raw = await redis.get(KEYS.paperAccount);
@@ -201,6 +210,12 @@ export async function POST() {
 
     const bars = await fetchBars(SYMBOL, BARS);
     const ma   = sma200(bars);
+
+    // Signal log — keep last 100 entries across runs
+    const signalLog: LogEntry[] = state.signalLog?.slice(-80) ?? [];
+    const log = (type: LogEntry["type"], msg: string, ts?: number) => {
+      signalLog.push({ ts: ts ?? Date.now(), type, msg });
+    };
 
     // Re-run the engine from startedAt forward
     let balance    = state.initialBalance;
@@ -220,12 +235,16 @@ export async function POST() {
     // Walk bars from startedAt
     const startIdx = bars.findIndex(b => b.time >= state.startedAt);
     if (startIdx < 205) {
-      await redis.set(KEYS.paperAccount, JSON.stringify({ ...state, lastRun: Date.now() }));
+      await redis.set(KEYS.paperAccount, JSON.stringify({ ...state, lastRun: Date.now(), signalLog }));
       return NextResponse.json({ message: "warming up" });
     }
 
+    // Only log the last 10 bars to avoid flooding
+    const logFromIdx = Math.max(Math.max(startIdx, 205), bars.length - 11);
+
     for (let i = Math.max(startIdx, 205); i < bars.length - 1; i++) {
       const bar = bars[i];
+      const shouldLog = i >= logFromIdx;
 
       if (open) {
         // Already tracked this bar?
@@ -252,8 +271,18 @@ export async function POST() {
             const mult = open.direction === "long" ? 1 : -1;
             open.pnl   = (open.exitPrice! - open.entryPrice) * mult * open.size;
             balance   += open.pnl;
+            if (shouldLog) {
+              const icon = open.exitReason === "tp" ? "✅" : open.exitReason === "be" ? "⚡" : "❌";
+              const pnlStr = (open.pnl >= 0 ? "+" : "") + "$" + fmt2(Math.abs(open.pnl));
+              log("exit", `${icon} CLOSED ${open.direction.toUpperCase()} @ $${fmt2(open.exitPrice!)} — ${open.exitReason?.toUpperCase()} ${pnlStr}`, bar.time);
+            }
             newTrades.push({ ...open });
             open = null;
+          } else if (shouldLog) {
+            const unrealMult = open.direction === "long" ? 1 : -1;
+            const unrealPnl = (bar.close - open.entryPrice) * unrealMult * open.size;
+            const pnlStr = (unrealPnl >= 0 ? "+" : "") + "$" + fmt2(Math.abs(unrealPnl));
+            log("info", `📊 Open ${open.direction.toUpperCase()} @ $${fmt2(open.entryPrice)} · Current $${fmt2(bar.close)} · Unrealized ${pnlStr}${open.trailedToBreakeven ? " · SL at breakeven" : ""}`, bar.time);
           }
         }
         continue;
@@ -264,12 +293,27 @@ export async function POST() {
       const side    = aboveMA ? "bullish" : "bearish";
       const dir: "long" | "short" = aboveMA ? "long" : "short";
       const maSlope = ma[i] - ma[Math.max(0, i - 10)];
-      const pat     = detectPattern(bars, i, side);
-      if (!pat) continue;
+
+      if (shouldLog) {
+        const trendLabel = aboveMA ? "Uptrend · Above 200 MA" : "Downtrend · Below 200 MA";
+        const maDir = maSlope > 0 ? "↗ rising" : "↘ falling";
+        log("trend", `1D: ${trendLabel} · MA ${maDir} · BTC $${fmt2(bar.close)}`, bar.time);
+      }
+
+      const pat = detectPattern(bars, i, side);
+      if (!pat) {
+        if (shouldLog) log("skip", `No pattern — scanning next bar`, bar.time);
+        continue;
+      }
+
+      if (shouldLog) log("pattern", `Pattern detected: ${pat.name}`, bar.time);
 
       const isStruct = pat.stop != null;
       const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
-      if (distFromMA > (isStruct ? MAX_DIST_MA_STRUCT : MAX_DIST_MA)) continue;
+      if (distFromMA > (isStruct ? MAX_DIST_MA_STRUCT : MAX_DIST_MA)) {
+        if (shouldLog) log("skip", `Skip — price too far from 200 MA (${(distFromMA * 100).toFixed(1)}% > ${((isStruct ? MAX_DIST_MA_STRUCT : MAX_DIST_MA) * 100).toFixed(0)}% limit)`, bar.time);
+        continue;
+      }
 
       const barRsi   = rsi(bars, i);
       const volRatio = volumeRatio(bars, i);
@@ -280,10 +324,16 @@ export async function POST() {
       if (dir === "short" && barRsi > 35) confirmations.push(`RSI ${barRsi.toFixed(0)}`);
       if (volRatio >= 1.1)                confirmations.push(`vol ${volRatio.toFixed(1)}×`);
       if (slopeAligned && slopePct > 0.3) confirmations.push(`MA slope`);
-      if (pat.engulfing)                  confirmations.push("engulf confirm");
-      if (confirmations.length < 2) continue;
+      if (pat.engulfing)                  confirmations.push("engulfing candle");
+      if (confirmations.length < 2) {
+        if (shouldLog) log("skip", `Skip — not enough confirmations (${confirmations.length}/2 needed): ${confirmations.join(", ") || "none"}`, bar.time);
+        continue;
+      }
 
-      if (i + 1 >= bars.length) continue;
+      if (i + 1 >= bars.length) {
+        if (shouldLog) log("wait", `⏳ Signal confirmed — entering next bar open`, bar.time);
+        continue;
+      }
       const entryBar   = bars[i + 1];
       const entryPrice = entryBar.open;
       const entryTime  = entryBar.time;
@@ -298,7 +348,10 @@ export async function POST() {
         tpPrice = pat.target;
         const valid = (dir === "short" && slPrice > entryPrice && tpPrice < entryPrice) ||
                       (dir === "long"  && slPrice < entryPrice && tpPrice > entryPrice);
-        if (!valid) continue;
+        if (!valid) {
+          if (shouldLog) log("skip", `Skip — SL/TP geometry invalid for ${dir}`, bar.time);
+          continue;
+        }
         slDist = Math.abs(slPrice - entryPrice);
       } else {
         slDist  = barAtr * ATR_SL;
@@ -308,10 +361,15 @@ export async function POST() {
       const size = slDist > 0 ? (balance * RISK) / slDist : 0;
       if (size <= 0) continue;
 
+      const entryReason = `${pat.name} · ${confirmations.join(" · ")} · ${dir === "long" ? "Above" : "Below"} 200 MA`;
+      if (shouldLog) {
+        log("entry", `🚀 ENTRY ${dir.toUpperCase()} @ $${fmt2(entryPrice)} · SL $${fmt2(slPrice)} · TP $${fmt2(tpPrice)} · RR 1:${RR} · ${confirmations.join(" · ")}`, entryTime);
+      }
+
       open = {
         direction: dir, entryTime, entryPrice, slPrice, tpPrice, slDist, size,
         trailedToBreakeven: false, extremePrice: entryPrice,
-        entryReason: `${pat.name} · ${confirmations.join(" · ")} · ${dir === "long" ? "Above" : "Below"} 200 MA`,
+        entryReason,
       };
       newTrades.push({ ...open });
     }
@@ -347,6 +405,7 @@ export async function POST() {
       balance: finalBalance,
       trades: allTrades,
       lastRun: Date.now(),
+      signalLog: signalLog.slice(-100),
     };
     await redis.set(KEYS.paperAccount, JSON.stringify(newState));
 
@@ -369,6 +428,7 @@ export async function POST() {
         unrealized_pnl: +unrealizedPnl.toFixed(2),
         entry_reason:   openTrade.entryReason,
       } : null,
+      signal_log: signalLog.slice(-50).reverse(), // newest first
     };
 
     return NextResponse.json(accountPayload);
