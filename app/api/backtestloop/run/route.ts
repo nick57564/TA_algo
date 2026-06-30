@@ -389,6 +389,11 @@ function runEngine(bars: Bar[], ma: number[]) {
   const MAX_DIST_MA = 0.08;
   const MAX_DIST_MA_STRUCTURE = 0.15;
 
+  // Pre-compute indicator arrays once for the full bar series
+  const ema9arr  = ema(bars, 9);
+  const ema21arr = ema(bars, 21);
+  const macdData = macd(bars);
+
   const trades: Trade[]   = [];
   const signals: object[] = [];
   let balance    = CAP;
@@ -407,10 +412,16 @@ function runEngine(bars: Bar[], ma: number[]) {
       if (open.isStructure && !open.targetReached) {
         if ((open.direction === "long" ? bar.high >= open.tpPrice : bar.low <= open.tpPrice)) open.targetReached = true;
       }
-      const trailDist = open.targetReached ? atr(bars, i, 10) * 3 : open.slDist;
-      if (favMove >= open.slDist || open.targetReached) {
-        const trailStop = open.direction === "long" ? open.extremePrice - trailDist : open.extremePrice + trailDist;
-        open.slPrice = open.direction === "long" ? Math.max(open.slPrice, trailStop) : Math.min(open.slPrice, trailStop);
+      // Active trailing: once in 1R profit, trail at extremePrice ± 1.5×ATR14
+      // This locks in profits progressively rather than just sitting at breakeven
+      if (favMove >= open.slDist) {
+        const barAtr14 = atr(bars, i, 14);
+        const trailStop = open.direction === "long"
+          ? open.extremePrice - barAtr14 * 1.5
+          : open.extremePrice + barAtr14 * 1.5;
+        open.slPrice = open.direction === "long"
+          ? Math.max(open.slPrice, trailStop)
+          : Math.min(open.slPrice, trailStop);
         open.trailedToBreakeven = true;
       }
       let closed = false;
@@ -504,53 +515,45 @@ function runEngine(bars: Bar[], ma: number[]) {
     const side    = aboveMA ? "bullish" : "bearish";
     const dir: "long" | "short" = aboveMA ? "long" : "short";
 
+    // ── FILTER 1: EMA9 must align with trade direction (micro-trend confirmation) ──
+    // This is the single most powerful filter — it removes trades where the short-term
+    // trend is working against us even if the 200 MA is pointing the right way.
+    // Exception: H&S and Double/Triple Top can be near crossover so we allow ±0.3% leeway
+    const e9 = ema9arr[i], e21 = ema21arr[i];
+    const ema9aligned = dir === "long" ? e9 >= e21 * 0.997 : e9 <= e21 * 1.003;
+    if (!ema9aligned) continue;
+
     const patternResult = detectPattern(bars, i, side, ema9arr, ema21arr, macdData);
     if (!patternResult) continue;
 
     const isStructurePattern = patternResult.name.includes("Head") || patternResult.name.includes("Double") || patternResult.name.includes("Triple");
     const isCandlePattern    = !isStructurePattern;
     const isInvertedHaS      = !!patternResult.isInvertedHaS;
-    const isPureEngulfing     = patternResult.engulfing && isCandlePattern && !patternResult.name.includes("Morning") && !patternResult.name.includes("Evening") && !patternResult.name.includes("Hammer") && !patternResult.name.includes("Shooting");
-
-    const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
-    if (distFromMA > (isStructurePattern ? MAX_DIST_MA_STRUCTURE : MAX_DIST_MA)) continue;
 
     const barRsi   = rsi(bars, i);
     const volRatio = volumeRatio(bars, i);
-    const slope5   = ma[i] - ma[Math.max(0, i - 5)];
-    const slope15  = ma[i] - ma[Math.max(0, i - 15)];
-    const slope5Pct = Math.abs(slope5) / ma[Math.max(0, i - 5)] * 100;
 
-    // trendAcc: both slopes must align (Inverted H&S exempt)
-    if (!isCandlePattern && !isInvertedHaS) {
-      const s5ok  = dir === "long" ? slope5 > 0 : slope5 < 0;
-      const s15ok = dir === "long" ? slope15 > 0 : slope15 < 0;
-      if (!s5ok || !s15ok) continue;
-    }
+    // ── FILTER 2: RSI extreme gate — don't buy overbought, don't sell oversold ──
+    const rsiExtreme = dir === "long" ? barRsi > 75 : barRsi < 25;
+    if (rsiExtreme) continue;
 
-    // Structure vol gate
-    if (isStructurePattern && !isInvertedHaS && volRatio < 1.15) continue;
+    // ── FILTER 3: Distance from 200 MA cap (avoid over-extended moves) ──
+    const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
+    if (distFromMA > (isStructurePattern ? MAX_DIST_MA_STRUCTURE : MAX_DIST_MA)) continue;
 
-    // Long structure: vol >= 1.45× OR RSI < 40
-    if (isStructurePattern && !isInvertedHaS && dir === "long" && volRatio < 1.45 && barRsi >= 40) continue;
-
-    // Pure engulfing gate: RSI < 35 OR vol >= 1.5×
-    if (isPureEngulfing) {
-      const engulfRsiOk = dir === "long" ? barRsi < 35 : barRsi > 65;
-      if (!engulfRsiOk && volRatio < 1.5) continue;
-    }
-
-    const slopeAligned = (dir === "long" && slope5 > 0) || (dir === "short" && slope5 < 0);
+    // ── FILTER 4: MACD histogram + RSI + volume confirmation (need ≥ 1) ──
+    const macdHistAligned = macdData
+      ? (dir === "long" ? macdData.hist[i] > 0 : macdData.hist[i] < 0)
+      : false;
     const confirmations: string[] = [];
-    if (dir === "long"  && barRsi < 40)  confirmations.push(`RSI ${barRsi.toFixed(0)}`);
-    if (dir === "short" && barRsi > 60)  confirmations.push(`RSI ${barRsi.toFixed(0)}`);
-    if (volRatio >= 1.3)                 confirmations.push(`vol ${volRatio.toFixed(1)}×`);
-    if (isCandlePattern && slopeAligned && slope5Pct > 0.5) confirmations.push(`slope ${slope5Pct.toFixed(1)}%`);
-    if (patternResult.engulfing)         confirmations.push("engulf");
-
-    // Short structure requires minConf=2; long structure minConf=1
-    const minConf = (isCandlePattern || (isStructurePattern && !isInvertedHaS && dir === "short")) ? 2 : 1;
-    if (confirmations.length < minConf) continue;
+    if (macdHistAligned)                  confirmations.push("MACD");
+    if (dir === "long"  && barRsi < 50)   confirmations.push(`RSI ${barRsi.toFixed(0)}`);
+    if (dir === "short" && barRsi > 50)   confirmations.push(`RSI ${barRsi.toFixed(0)}`);
+    if (volRatio >= 1.2)                  confirmations.push(`vol ${volRatio.toFixed(1)}×`);
+    if (patternResult.engulfing)          confirmations.push("engulf");
+    // Structure patterns are strong enough on their own; quant signals already ARE confirmations
+    const needsConf = isCandlePattern && !patternResult.name.includes("EMA") && !patternResult.name.includes("MACD") && !patternResult.name.includes("RSI") && !patternResult.name.includes("Pullback") && !patternResult.name.includes("Crossover");
+    if (needsConf && confirmations.length === 0) continue;
 
     if (i + 1 >= bars.length) continue;
     const entryBar   = bars[i + 1];
