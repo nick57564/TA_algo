@@ -110,8 +110,8 @@ function pivots(bars: Bar[], type: "high" | "low", n = 3): { price: number; idx:
 
 function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { name: string; engulfing: boolean; stop?: number; target?: number; isInvertedHaS?: boolean } | null {
   if (i < 20) return null;
-  const win    = bars.slice(i - 100, i + 1);
-  const offset = i - 100 < 0 ? i : 100;
+  const win    = bars.slice(Math.max(0, i - 160), i + 1);
+  const offset = Math.min(i, 160);
   const pHigh = pivots(win, "high", 2).filter(p => p.idx < offset);
   const pLow  = pivots(win, "low",  2).filter(p => p.idx < offset);
   const close = bars[i].close;
@@ -147,7 +147,9 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
         const rs = rsCand[rsCand.length - 1];
         const headLift = Math.min(head.price - ls.price, head.price - rs.price) / head.price;
         const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
-        if (headLift > 0.015 && shoulderSim < 0.06 && rs.price < head.price) {
+        const spanBars = rs.idx - ls.idx; // pattern must span at least 30 bars (~1.5 months)
+        // Allow asymmetric shoulders (RS often lower) but require a significant head and wide span
+        if (headLift > 0.03 && shoulderSim < 0.15 && spanBars >= 30 && rs.price < head.price) {
           const neckL = Math.min(...win.slice(ls.idx, head.idx + 1).map(b => b.low));
           const neckR = Math.min(...win.slice(head.idx, rs.idx + 1).map(b => b.low));
           const neck  = Math.max(neckL, neckR);
