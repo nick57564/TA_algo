@@ -338,8 +338,8 @@ function runEngine(bars: Bar[], ma: number[]) {
         const bullEngulf = prev.close < prev.open && bar.open < prev.close && bar.close > prev.open;
 
         if (pendingHaS.dir === "short") {
-          // Price must retest neckline from below (rally back up to within 2%)
-          const retested = bar.high >= pendingHaS.neck * 0.98;
+          // Price must retest neckline from below — touch within 1.5% but close must stay BELOW neckline
+          const retested = bar.high >= pendingHaS.neck * 0.985 && bar.close < pendingHaS.neck;
           if (retested && bearEngulf && i + 1 < bars.length) {
             const entryBar   = bars[i + 1];
             const entryPrice = entryBar.open;
