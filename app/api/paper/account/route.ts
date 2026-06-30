@@ -50,7 +50,7 @@ export async function GET() {
       position:       state.position ?? null,
       last_run:       state.last_run,
       started_at:     state.started_at,
-      signal_log:     (state as Record<string, unknown>).signal_log ?? [],
+      signal_log:     (state as PaperState & { signal_log?: unknown[] }).signal_log ?? [],
     });
   }
 
