@@ -136,24 +136,28 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
       }
     }
     {
-      // H&S = simply: 3 peaks where the middle is the highest, separated by troughs
+      // H&S: 3 peaks, middle highest, WITH clear troughs between them (the neckline)
+      // The head must sit well above the neckline — if not, it's just a flat range, not H&S
       let found = false;
       for (let pi = pHigh.length - 1; pi >= 1 && !found; pi--) {
         const head = pHigh[pi];
         // Left shoulder: any prior peak lower than head, at least 5 bars away
         const lsCandidates = pHigh.filter(p => p.idx < head.idx - 5 && p.price < head.price);
         if (lsCandidates.length === 0) continue;
-        const ls = lsCandidates[lsCandidates.length - 1]; // closest to head on left
+        const ls = lsCandidates[lsCandidates.length - 1];
         // Right shoulder: any later peak lower than head, at least 5 bars after head
         const rsCand = pHigh.filter(p => p.idx > head.idx + 5 && p.price < head.price);
         if (rsCand.length === 0) continue;
-        const rs = rsCand[0]; // closest to head on right
-        // Pattern must span at least 20 bars total (avoid noise on tiny wiggles)
-        if (rs.idx - ls.idx < 20) continue;
-        // Neckline = highest of the two troughs (between LS→Head and Head→RS)
+        const rs = rsCand[0];
+        // Must span at least 30 bars — a real pattern takes weeks to form
+        if (rs.idx - ls.idx < 30) continue;
+        // Neckline = top of the two troughs between the peaks
         const neckL = Math.min(...win.slice(ls.idx, head.idx + 1).map(b => b.low));
         const neckR = Math.min(...win.slice(head.idx, rs.idx + 1).map(b => b.low));
         const neck  = Math.max(neckL, neckR);
+        // The head must be meaningfully above the neckline — proves there were real pullbacks
+        // (if head ≈ neckline the "pattern" is just a flat range with tiny wiggles, not H&S)
+        if (head.price - neck < neck * 0.04) continue; // head at least 4% above neckline
         if (close < neck * 0.995) {
           found = true;
           return { name: "📉 Head & Shoulders — left shoulder, head, right shoulder formed; neckline broken", engulfing: bearEngulf, stop: rs.price, target: neck - (head.price - neck) };
