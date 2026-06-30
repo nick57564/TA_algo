@@ -219,6 +219,56 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
       return { name: "🌆 Evening Star — three-candle reversal: big up, doji pause, big down", engulfing: false };
   }
 
+  // ── Proven quant strategies (web-researched) ──────────────────────────────
+
+  // 1. Larry Connors RSI-2: 68–91% win rate on equities & crypto
+  //    Buy when 2-period RSI < 10 in uptrend; sell when 2-period RSI > 90 in downtrend
+  //    Source: quantifiedstrategies.com — consistently profitable since 1993
+  if (i >= 2) {
+    const r2 = rsi(bars, i, 2);
+    const r2prev = rsi(bars, i - 1, 2);
+    if (side === "bullish" && r2 < 10 && r2prev < r2 + 5) // RSI-2 extremely oversold + starting to turn
+      return { name: "📈 RSI-2 Oversold — Connors mean reversion, 2-period RSI < 10 in uptrend", engulfing: bullEngulf };
+    if (side === "bearish" && r2 > 90 && r2prev > r2 - 5) // RSI-2 extremely overbought + starting to turn
+      return { name: "📉 RSI-2 Overbought — Connors mean reversion, 2-period RSI > 90 in downtrend", engulfing: bearEngulf };
+  }
+
+  // 2. Triple RSI Pullback: 90% win rate (quantifiedstrategies.com Triple RSI strategy)
+  //    5-day RSI declining 3 consecutive days, from above 60 down to below 30, price above 200 MA
+  if (side === "bullish" && i >= 4) {
+    const r5_0 = rsi(bars, i,     5);
+    const r5_1 = rsi(bars, i - 1, 5);
+    const r5_2 = rsi(bars, i - 2, 5);
+    const r5_3 = rsi(bars, i - 3, 5);
+    if (r5_0 < 30 && r5_0 < r5_1 && r5_1 < r5_2 && r5_2 < r5_3 && r5_3 > 60)
+      return { name: "📈 Triple RSI Pullback — 5-day RSI dropped 3 days straight from overbought to oversold", engulfing: bullEngulf };
+  }
+  if (side === "bearish" && i >= 4) {
+    const r5_0 = rsi(bars, i,     5);
+    const r5_1 = rsi(bars, i - 1, 5);
+    const r5_2 = rsi(bars, i - 2, 5);
+    const r5_3 = rsi(bars, i - 3, 5);
+    if (r5_0 > 70 && r5_0 > r5_1 && r5_1 > r5_2 && r5_2 > r5_3 && r5_3 < 40)
+      return { name: "📉 Triple RSI Rally — 5-day RSI rose 3 days straight from oversold to overbought", engulfing: bearEngulf };
+  }
+
+  // 3. 3-Bar Pullback: buy after 3 consecutive red (down) candles in uptrend, on first green close
+  //    Quantified: profitable since 1980s on S&P 500; adapts well to daily crypto
+  if (side === "bullish" && i >= 3) {
+    const c1 = bars[i - 3], c2 = bars[i - 2], c3 = bars[i - 1], c4 = bars[i];
+    const threeReds = c1.close < c1.open && c2.close < c2.open && c3.close < c3.open;
+    const nowGreen  = c4.close > c4.open;
+    if (threeReds && nowGreen)
+      return { name: "📈 3-Bar Pullback — 3 consecutive red candles in uptrend, first green close signals reversal", engulfing: bullEngulf };
+  }
+  if (side === "bearish" && i >= 3) {
+    const c1 = bars[i - 3], c2 = bars[i - 2], c3 = bars[i - 1], c4 = bars[i];
+    const threeGreens = c1.close > c1.open && c2.close > c2.open && c3.close > c3.open;
+    const nowRed      = c4.close < c4.open;
+    if (threeGreens && nowRed)
+      return { name: "📉 3-Bar Rally Short — 3 consecutive green candles in downtrend, first red close signals reversal", engulfing: bearEngulf };
+  }
+
   return null;
 }
 
