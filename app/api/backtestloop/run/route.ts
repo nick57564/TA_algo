@@ -260,6 +260,15 @@ function atr(bars: Bar[], idx: number, n = 10): number {
   return count > 0 ? sum / count : bars[idx].high - bars[idx].low;
 }
 
+// Pending H&S retest: wait for price to pull back to neckline, then enter on engulfing
+interface PendingHaS {
+  dir: "long" | "short";
+  neck: number;       // neckline price to retest
+  stop: number;       // SL beyond right shoulder
+  target: number;     // measured-move TP
+  expiresBar: number; // cancel if no retest by this bar
+}
+
 function runEngine(bars: Bar[], ma: number[]) {
   const RISK        = 0.01;
   const ATR_SL_MULT = 2.0;
@@ -274,6 +283,7 @@ function runEngine(bars: Bar[], ma: number[]) {
   let open: Trade | null  = null;
   let lossStreak = 0;
   let slCooldown = 0;
+  let pendingHaS: PendingHaS | null = null; // waiting for neckline retest
 
   for (let i = 205; i < bars.length; i++) {
     const bar = bars[i];
@@ -315,6 +325,68 @@ function runEngine(bars: Bar[], ma: number[]) {
     }
 
     if (slCooldown > 0) continue;
+
+    // ── Pending H&S retest check ──────────────────────────────────────────────
+    // After neckline break, wait for price to pull back to the neckline and
+    // form a confirmation engulfing candle before entering.
+    if (pendingHaS && !open) {
+      if (i > pendingHaS.expiresBar) {
+        pendingHaS = null; // retest never came — cancel
+      } else {
+        const prev = bars[i - 1];
+        const bearEngulf = prev.close > prev.open && bar.open > prev.close && bar.close < prev.open;
+        const bullEngulf = prev.close < prev.open && bar.open < prev.close && bar.close > prev.open;
+
+        if (pendingHaS.dir === "short") {
+          // Price must retest neckline from below (rally back up to within 2%)
+          const retested = bar.high >= pendingHaS.neck * 0.98;
+          if (retested && bearEngulf && i + 1 < bars.length) {
+            const entryBar   = bars[i + 1];
+            const entryPrice = entryBar.open;
+            const slDist     = Math.abs(pendingHaS.stop - entryPrice);
+            if (slDist > 0 && pendingHaS.stop > entryPrice && pendingHaS.target < entryPrice) {
+              const size = (balance * RISK) / slDist;
+              open = {
+                direction: "short", entryTime: entryBar.time, exitTime: 0,
+                entryPrice, exitPrice: 0,
+                slPrice: pendingHaS.stop, tpPrice: pendingHaS.target,
+                slDist, trailedToBreakeven: false, extremePrice: entryPrice,
+                isStructure: true, targetReached: false, size, pnl: 0, exitReason: "eod",
+                entryIdx: i + 1,
+                entryReason: `📉 H&S retest short · Neckline @ $${pendingHaS.neck.toFixed(0)} · Bearish engulf on retest · SL ${(slDist / entryPrice * 100).toFixed(1)}%`,
+                analysis: "",
+              };
+              signals.push({ timestamp: new Date(entryBar.time).toISOString(), direction: "short", type: "Entry", price: entryPrice });
+              pendingHaS = null;
+            }
+          }
+        } else {
+          // Inverted H&S: price must retest neckline from above (pull back to within 2%)
+          const retested = bar.low <= pendingHaS.neck * 1.02;
+          if (retested && bullEngulf && i + 1 < bars.length) {
+            const entryBar   = bars[i + 1];
+            const entryPrice = entryBar.open;
+            const slDist     = Math.abs(entryPrice - pendingHaS.stop);
+            if (slDist > 0 && pendingHaS.stop < entryPrice && pendingHaS.target > entryPrice) {
+              const size = (balance * RISK) / slDist;
+              open = {
+                direction: "long", entryTime: entryBar.time, exitTime: 0,
+                entryPrice, exitPrice: 0,
+                slPrice: pendingHaS.stop, tpPrice: pendingHaS.target,
+                slDist, trailedToBreakeven: false, extremePrice: entryPrice,
+                isStructure: true, targetReached: false, size, pnl: 0, exitReason: "eod",
+                entryIdx: i + 1,
+                entryReason: `📈 Inv H&S retest long · Neckline @ $${pendingHaS.neck.toFixed(0)} · Bullish engulf on retest · SL ${(slDist / entryPrice * 100).toFixed(1)}%`,
+                analysis: "",
+              };
+              signals.push({ timestamp: new Date(entryBar.time).toISOString(), direction: "long", type: "Entry", price: entryPrice });
+              pendingHaS = null;
+            }
+          }
+        }
+      }
+      if (open) continue; // just entered via retest
+    }
 
     const aboveMA = bar.close > ma[i];
     const side    = aboveMA ? "bullish" : "bearish";
@@ -375,9 +447,26 @@ function runEngine(bars: Bar[], ma: number[]) {
 
     const barAtr = atr(bars, i);
     let slPrice: number, tpPrice: number, slDist: number;
+    const isHaS = patternResult.name.includes("Head & Shoulders") || patternResult.name.includes("Inv H&S") || patternResult.name.includes("Inverted H&S");
+
     if (patternResult.stop != null && patternResult.target != null) {
-      slPrice = dir === "short" ? patternResult.stop * 1.005 : patternResult.stop * 0.995;
-      tpPrice = patternResult.target;
+      const rawSl = dir === "short" ? patternResult.stop * 1.005 : patternResult.stop * 0.995;
+      const rawTp = patternResult.target;
+
+      // H&S: don't enter on neckline break — set pending retest instead
+      if (isHaS && !pendingHaS) {
+        const neck = bars[i].close; // approximate neckline as current close (already broke it)
+        const validShort = dir === "short" && rawSl > bars[i].close && rawTp < bars[i].close;
+        const validLong  = dir === "long"  && rawSl < bars[i].close && rawTp > bars[i].close;
+        if (validShort || validLong) {
+          pendingHaS = { dir, neck: rawSl > bars[i].close ? bars[i].close * 1.01 : bars[i].close * 0.99, stop: rawSl, target: rawTp, expiresBar: i + 15 };
+          signals.push({ timestamp: new Date(bars[i].time).toISOString(), direction: dir, type: "Pending H&S retest", price: bars[i].close });
+        }
+        continue; // do not enter now
+      }
+
+      slPrice = rawSl;
+      tpPrice = rawTp;
       const validShort = dir === "short" && slPrice > entryPrice && tpPrice < entryPrice;
       const validLong  = dir === "long"  && slPrice < entryPrice && tpPrice > entryPrice;
       if (!validShort && !validLong) continue;
