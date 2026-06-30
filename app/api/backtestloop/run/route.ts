@@ -136,27 +136,27 @@ function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish"): { n
       }
     }
     {
+      // H&S = simply: 3 peaks where the middle is the highest, separated by troughs
       let found = false;
       for (let pi = pHigh.length - 1; pi >= 1 && !found; pi--) {
         const head = pHigh[pi];
-        const lsCandidates = pHigh.filter(p => p.idx < head.idx && (head.price - p.price) / head.price >= 0.02);
+        // Left shoulder: any prior peak lower than head, at least 5 bars away
+        const lsCandidates = pHigh.filter(p => p.idx < head.idx - 5 && p.price < head.price);
         if (lsCandidates.length === 0) continue;
-        const ls = lsCandidates[lsCandidates.length - 1];
-        const rsCand = pHigh.filter(p => p.idx > head.idx && p.price < head.price);
+        const ls = lsCandidates[lsCandidates.length - 1]; // closest to head on left
+        // Right shoulder: any later peak lower than head, at least 5 bars after head
+        const rsCand = pHigh.filter(p => p.idx > head.idx + 5 && p.price < head.price);
         if (rsCand.length === 0) continue;
-        const rs = rsCand[rsCand.length - 1];
-        const headLift = Math.min(head.price - ls.price, head.price - rs.price) / head.price;
-        const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
-        const spanBars = rs.idx - ls.idx; // pattern must span at least 30 bars (~1.5 months)
-        // Allow asymmetric shoulders (RS often lower) but require a significant head and wide span
-        if (headLift > 0.03 && shoulderSim < 0.15 && spanBars >= 30 && rs.price < head.price) {
-          const neckL = Math.min(...win.slice(ls.idx, head.idx + 1).map(b => b.low));
-          const neckR = Math.min(...win.slice(head.idx, rs.idx + 1).map(b => b.low));
-          const neck  = Math.max(neckL, neckR);
-          if (close < neck * 0.995) {
-            found = true;
-            return { name: "📉 Head & Shoulders — left shoulder, head, right shoulder formed; neckline broken", engulfing: bearEngulf, stop: rs.price, target: neck - (head.price - neck) };
-          }
+        const rs = rsCand[0]; // closest to head on right
+        // Pattern must span at least 20 bars total (avoid noise on tiny wiggles)
+        if (rs.idx - ls.idx < 20) continue;
+        // Neckline = highest of the two troughs (between LS→Head and Head→RS)
+        const neckL = Math.min(...win.slice(ls.idx, head.idx + 1).map(b => b.low));
+        const neckR = Math.min(...win.slice(head.idx, rs.idx + 1).map(b => b.low));
+        const neck  = Math.max(neckL, neckR);
+        if (close < neck * 0.995) {
+          found = true;
+          return { name: "📉 Head & Shoulders — left shoulder, head, right shoulder formed; neckline broken", engulfing: bearEngulf, stop: rs.price, target: neck - (head.price - neck) };
         }
       }
     }
