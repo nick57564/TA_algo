@@ -3,37 +3,38 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic   = "force-dynamic";
 export const maxDuration = 60;
 
-const HL = "https://api.hyperliquid.xyz/info";
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface RawCandle { t: number; o: string; h: string; l: string; c: string; v: string; }
 interface Bar { time: number; open: number; high: number; low: number; close: number; volume: number; }
 
-const INTERVAL_MS: Record<string, number> = {
-  "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
-};
+interface Swing { type: "high" | "low"; price: number; idx: number; }
 
-const STOOQ_SYMBOLS: Record<string, string> = {
-  GOLD: "gc.f", XAUUSD: "gc.f", SPX: "^spx", SP500: "^spx", "S&P500": "^spx",
-};
+interface StructureState {
+  trend: "bullish" | "bearish" | "neutral";
+  activeHL: number;  // most recent swing low  → SL for longs
+  activeLH: number;  // most recent swing high → SL for shorts
+}
+
+interface Trade {
+  direction: "long" | "short";
+  entryTime: number; exitTime: number;
+  entryPrice: number; exitPrice: number;
+  slPrice: number; tpPrice: number;
+  pnl: number; size: number; slDist: number;
+  trailedToBreakeven: boolean; extremePrice: number;
+  exitReason: "tp" | "sl" | "be" | "eod";
+  entryReason: string; analysis: string;
+  entryIdx: number;
+}
+
+// ─── Bar Fetching ─────────────────────────────────────────────────────────────
+
+const HL = "https://api.hyperliquid.xyz/info";
+const INTERVAL_MS: Record<string, number> = { "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000 };
 const YAHOO_SYMBOLS: Record<string, string> = {
   GOLD: "GC=F", XAUUSD: "GC=F", SPX: "^GSPC", SP500: "^GSPC", "S&P500": "^GSPC",
 };
-
-async function fetchStooq(sym: string, count: number): Promise<Bar[]> {
-  const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d`;
-  const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-  if (!res.ok) throw new Error(`stooq ${res.status}`);
-  const text = await res.text();
-  const lines = text.trim().split("\n").slice(1);
-  const bars: Bar[] = [];
-  for (const line of lines) {
-    const [date, open, high, low, close, volume] = line.split(",");
-    if (!date || !close || isNaN(+close)) continue;
-    bars.push({ time: new Date(date).getTime(), open: +open, high: +high, low: +low, close: +close, volume: volume ? +volume : 0 });
-  }
-  bars.sort((a, b) => a.time - b.time);
-  return bars.slice(-count - 200);
-}
 
 async function fetchYahoo(sym: string, count: number): Promise<Bar[]> {
   const end   = Math.floor(Date.now() / 1000);
@@ -52,7 +53,6 @@ async function fetchYahoo(sym: string, count: number): Promise<Bar[]> {
 }
 
 async function fetchBars(symbol: string, interval: string, count: number): Promise<Bar[]> {
-  // Use Yahoo Finance directly for traditional assets (stooq uses JS challenge that blocks server-side fetches)
   const yahooSym = YAHOO_SYMBOLS[symbol.toUpperCase()];
   if (yahooSym) return await fetchYahoo(yahooSym, count);
   const ms    = INTERVAL_MS[interval] ?? INTERVAL_MS["1d"];
@@ -64,382 +64,318 @@ async function fetchBars(symbol: string, interval: string, count: number): Promi
     body: JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval, startTime: start, endTime: end } }),
   });
   const raw: RawCandle[] = await resp.json();
-  return raw.map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c, volume: +c.v })).sort((a, b) => a.time - b.time);
+  return raw.map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c, volume: +c.v }))
+            .sort((a, b) => a.time - b.time);
 }
 
-function rsi(bars: Bar[], idx: number, period = 14): number {
-  if (idx < period) return 50;
-  let gains = 0, losses = 0;
-  for (let i = idx - period + 1; i <= idx; i++) {
-    const d = bars[i].close - bars[i - 1].close;
-    if (d > 0) gains += d; else losses -= d;
-  }
-  const rs = losses === 0 ? 100 : gains / losses;
-  return 100 - 100 / (1 + rs);
-}
+// ─── Indicators ───────────────────────────────────────────────────────────────
 
-// EMA — used for 9/21 crossover strategy
 function ema(bars: Bar[], period: number): number[] {
   const k = 2 / (period + 1);
   const out: number[] = [];
   for (let i = 0; i < bars.length; i++) {
-    if (i === 0) { out.push(bars[0].close); continue; }
-    out.push(bars[i].close * k + out[i - 1] * (1 - k));
+    out.push(i === 0 ? bars[0].close : bars[i].close * k + out[i - 1] * (1 - k));
   }
   return out;
 }
 
-// MACD — 12/26/9 standard settings
-function macd(bars: Bar[]): { line: number[]; signal: number[]; hist: number[] } {
-  const fast = ema(bars, 12);
-  const slow = ema(bars, 26);
-  const line = fast.map((f, i) => f - slow[i]);
-  // signal = 9-period EMA of macd line
-  const k = 2 / (9 + 1);
-  const signal: number[] = [];
-  for (let i = 0; i < line.length; i++) {
-    if (i === 0) { signal.push(line[0]); continue; }
-    signal.push(line[i] * k + signal[i - 1] * (1 - k));
-  }
-  return { line, signal, hist: line.map((l, i) => l - signal[i]) };
-}
-
-function volumeRatio(bars: Bar[], idx: number, n = 10): number {
-  if (idx < n) return 1;
-  const avg = bars.slice(idx - n, idx).reduce((s, b) => s + b.volume, 0) / n;
-  return avg > 0 ? bars[idx].volume / avg : 1;
-}
-
-function sma200(bars: Bar[]): number[] {
-  const out: number[] = []; let sum = 0;
-  for (let i = 0; i < bars.length; i++) {
-    sum += bars[i].close;
-    if (i >= 200) sum -= bars[i - 200].close;
-    out.push(sum / Math.min(i + 1, 200));
-  }
-  return out;
-}
-
-function pivots(bars: Bar[], type: "high" | "low", n = 3): { price: number; idx: number }[] {
-  const out: { price: number; idx: number }[] = [];
-  for (let i = n; i < bars.length - n; i++) {
-    const val = type === "high" ? bars[i].high : bars[i].low;
-    let ok = true;
-    for (let j = i - n; j <= i + n && ok; j++) {
-      if (j === i) continue;
-      ok = type === "high" ? bars[j].high < val : bars[j].low > val;
-    }
-    if (ok) out.push({ price: val, idx: i });
-  }
-  return out;
-}
-
-function detectPattern(bars: Bar[], i: number, side: "bullish" | "bearish", ema9arr?: number[], ema21arr?: number[], macdData?: ReturnType<typeof macd>): { name: string; engulfing: boolean; stop?: number; target?: number; isInvertedHaS?: boolean } | null {
-  if (i < 20) return null;
-  const win    = bars.slice(Math.max(0, i - 160), i + 1);
-  const offset = Math.min(i, 160);
-  const pHigh = pivots(win, "high", 2).filter(p => p.idx < offset);
-  const pLow  = pivots(win, "low",  2).filter(p => p.idx < offset);
-  const close = bars[i].close;
-  const prev = bars[i - 1];
-  const bearEngulf = prev.close > prev.open && bars[i].open > prev.close && close < prev.open;
-  const bullEngulf = prev.close < prev.open && bars[i].open < prev.close && close > prev.open;
-
-  if (side === "bearish") {
-    if (pHigh.length >= 2) {
-      const [a, b] = pHigh.slice(-2);
-      if (Math.abs(a.price - b.price) / a.price < 0.02 && Math.abs(a.idx - b.idx) >= 5) {
-        const neck = Math.min(...win.slice(a.idx, b.idx + 1).map(w => w.low));
-        if (close < neck * 0.99) return { name: "📉 Double Top — two equal peaks, neckline broken", engulfing: bearEngulf };
-      }
-    }
-    if (pHigh.length >= 3) {
-      const [a, b, c] = pHigh.slice(-3);
-      const avg = (a.price + b.price + c.price) / 3;
-      if (Math.abs(a.price - avg) / avg < 0.025 && Math.abs(c.price - avg) / avg < 0.025) {
-        const neck = Math.min(...win.slice(a.idx, c.idx + 1).map(w => w.low));
-        if (close < neck * 0.99) return { name: "📉 Triple Top — three failed attempts at resistance, breakdown confirmed", engulfing: bearEngulf };
-      }
-    }
-    {
-      // H&S: 3 peaks, middle highest, WITH clear troughs between them (the neckline)
-      // The head must sit well above the neckline — if not, it's just a flat range, not H&S
-      let found = false;
-      for (let pi = pHigh.length - 1; pi >= 1 && !found; pi--) {
-        const head = pHigh[pi];
-        // Left shoulder: any prior peak lower than head, at least 5 bars away
-        const lsCandidates = pHigh.filter(p => p.idx < head.idx - 5 && p.price < head.price);
-        if (lsCandidates.length === 0) continue;
-        const ls = lsCandidates[lsCandidates.length - 1];
-        // Right shoulder: any later peak lower than head, at least 5 bars after head
-        const rsCand = pHigh.filter(p => p.idx > head.idx + 5 && p.price < head.price);
-        if (rsCand.length === 0) continue;
-        const rs = rsCand[0];
-        // Must span at least 30 bars — a real pattern takes weeks to form
-        if (rs.idx - ls.idx < 30) continue;
-        // Neckline = top of the two troughs between the peaks
-        const neckL = Math.min(...win.slice(ls.idx, head.idx + 1).map(b => b.low));
-        const neckR = Math.min(...win.slice(head.idx, rs.idx + 1).map(b => b.low));
-        const neck  = Math.max(neckL, neckR);
-        // The head must be meaningfully above the neckline — proves there were real pullbacks
-        // (if head ≈ neckline the "pattern" is just a flat range with tiny wiggles, not H&S)
-        if (head.price - neck < neck * 0.04) continue; // head at least 4% above neckline
-        if (close < neck * 0.995) {
-          found = true;
-          return { name: "📉 Head & Shoulders — left shoulder, head, right shoulder formed; neckline broken", engulfing: bearEngulf, stop: rs.price, target: neck - (head.price - neck) };
-        }
-      }
-    }
-  }
-
-  if (side === "bullish") {
-    if (pLow.length >= 2) {
-      const [a, b] = pLow.slice(-2);
-      if (Math.abs(a.price - b.price) / a.price < 0.02 && Math.abs(a.idx - b.idx) >= 5) {
-        const neck = Math.max(...win.slice(a.idx, b.idx + 1).map(w => w.high));
-        if (close > neck * 1.01) return { name: "📈 Double Bottom — two equal lows, neckline broken", engulfing: bullEngulf };
-      }
-    }
-    if (pLow.length >= 3) {
-      const [a, b, c] = pLow.slice(-3);
-      const avg = (a.price + b.price + c.price) / 3;
-      if (Math.abs(a.price - avg) / avg < 0.025 && Math.abs(c.price - avg) / avg < 0.025) {
-        const neck = Math.max(...win.slice(a.idx, c.idx + 1).map(w => w.high));
-        if (close > neck * 1.01) return { name: "📈 Triple Bottom — three bounces from support, breakout confirmed", engulfing: bullEngulf };
-      }
-    }
-    if (pLow.length >= 3) {
-      const [ls, head, rs] = pLow.slice(-3);
-      const shoulderSim = Math.abs(ls.price - rs.price) / ls.price;
-      const headDip = Math.min(ls.price - head.price, rs.price - head.price) / ls.price;
-      if (headDip > 0.015 && shoulderSim < 0.04) {
-        const neck = Math.min(win[ls.idx].high, win[rs.idx].high);
-        if (close > neck * 1.005) return { name: "📈 Inverted H&S — classic reversal, neckline broken", engulfing: bullEngulf, isInvertedHaS: true };
-      }
-    }
-  }
-
-  if (side === "bearish" && bearEngulf) return { name: "📉 Bearish Engulfing — red candle fully swallowed the previous green candle", engulfing: true };
-  if (side === "bullish" && bullEngulf) return { name: "📈 Bullish Engulfing — green candle fully swallowed the previous red candle", engulfing: true };
-
-  const body      = Math.abs(bars[i].close - bars[i].open);
-  const bodyTop   = Math.max(bars[i].close, bars[i].open);
-  const bodyBot   = Math.min(bars[i].close, bars[i].open);
-  const lowerWick = bodyBot - bars[i].low;
-  const upperWick = bars[i].high - bodyTop;
-  const bodyPct   = body / bars[i].close;
-
-  if (side === "bullish" && lowerWick >= body * 2 && upperWick < body * 0.5 && bodyPct < 0.025)
-    return { name: "🔨 Hammer — long lower wick shows buyers stepped in and rejected the low", engulfing: bullEngulf };
-  if (side === "bearish" && upperWick >= body * 2 && lowerWick < body * 0.5 && bodyPct < 0.025)
-    return { name: "🌠 Shooting Star — long upper wick shows sellers rejected the high", engulfing: bearEngulf };
-
-  if (side === "bullish" && i >= 2) {
-    const c1 = bars[i - 2], c2 = bars[i - 1], c3 = bars[i];
-    if (c1.close < c1.open && (c1.open - c1.close) / c1.open > 0.015 && Math.abs(c2.close - c2.open) / c2.open < 0.01 && c3.close > c3.open && (c3.close - c3.open) / c3.open > 0.015 && c2.low < c1.low)
-      return { name: "🌅 Morning Star — three-candle reversal: big down, doji pause, big up", engulfing: false };
-  }
-  if (side === "bearish" && i >= 2) {
-    const c1 = bars[i - 2], c2 = bars[i - 1], c3 = bars[i];
-    if (c1.close > c1.open && (c1.close - c1.open) / c1.open > 0.015 && Math.abs(c2.close - c2.open) / c2.open < 0.01 && c3.close < c3.open && (c3.open - c3.close) / c3.open > 0.015 && c2.high > c1.high)
-      return { name: "🌆 Evening Star — three-candle reversal: big up, doji pause, big down", engulfing: false };
-  }
-
-  // ── Proven quant strategies — self-backtested via our own engine ──────────
-
-  // EMA 9/21 Crossover (quant-signals.com: BTC daily 88 trades PF 1.59 Sharpe 3.49)
-  // Long: EMA9 crosses above EMA21 → trend is turning up
-  // Short: EMA9 crosses below EMA21 → trend is turning down
-  if (ema9arr && ema21arr && i >= 1) {
-    const e9now  = ema9arr[i],  e9prev  = ema9arr[i - 1];
-    const e21now = ema21arr[i], e21prev = ema21arr[i - 1];
-    const crossUp   = e9prev <= e21prev && e9now > e21now;
-    const crossDown = e9prev >= e21prev && e9now < e21now;
-    if (side === "bullish" && crossUp)
-      return { name: "📈 EMA 9/21 Crossover — fast EMA crossed above slow EMA, trend turning bullish", engulfing: bullEngulf };
-    if (side === "bearish" && crossDown)
-      return { name: "📉 EMA 9/21 Crossover — fast EMA crossed below slow EMA, trend turning bearish", engulfing: bearEngulf };
-  }
-
-  // MACD Crossover (VermeirJellen GitHub: outperforms buy-and-hold on BTC)
-  // Long: MACD line crosses above signal line (momentum flipping positive)
-  // Short: MACD line crosses below signal line (momentum flipping negative)
-  if (macdData && i >= 1) {
-    const mLine = macdData.line, mSig = macdData.signal;
-    const crossUp   = mLine[i - 1] <= mSig[i - 1] && mLine[i] > mSig[i];
-    const crossDown = mLine[i - 1] >= mSig[i - 1] && mLine[i] < mSig[i];
-    // Only take crossovers below zero (better quality — confirmed by research)
-    if (side === "bullish" && crossUp && mLine[i] < 0)
-      return { name: "📈 MACD Crossover — MACD crossed above signal below zero, momentum reversing up", engulfing: bullEngulf };
-    if (side === "bearish" && crossDown && mLine[i] > 0)
-      return { name: "📉 MACD Crossover — MACD crossed below signal above zero, momentum reversing down", engulfing: bearEngulf };
-  }
-
-  // ── Mean reversion strategies ──────────────────────────────────────────────
-
-  // 1. Larry Connors RSI-2: 68–91% win rate on equities & crypto
-  //    Buy when 2-period RSI < 10 in uptrend; sell when 2-period RSI > 90 in downtrend
-  //    Source: quantifiedstrategies.com — consistently profitable since 1993
-  if (i >= 2) {
-    const r2 = rsi(bars, i, 2);
-    const r2prev = rsi(bars, i - 1, 2);
-    if (side === "bullish" && r2 < 10 && r2prev < r2 + 5) // RSI-2 extremely oversold + starting to turn
-      return { name: "📈 RSI-2 Oversold — Connors mean reversion, 2-period RSI < 10 in uptrend", engulfing: bullEngulf };
-    if (side === "bearish" && r2 > 90 && r2prev > r2 - 5) // RSI-2 extremely overbought + starting to turn
-      return { name: "📉 RSI-2 Overbought — Connors mean reversion, 2-period RSI > 90 in downtrend", engulfing: bearEngulf };
-  }
-
-  // 2. Triple RSI Pullback: 90% win rate (quantifiedstrategies.com Triple RSI strategy)
-  //    5-day RSI declining 3 consecutive days, from above 60 down to below 30, price above 200 MA
-  if (side === "bullish" && i >= 4) {
-    const r5_0 = rsi(bars, i,     5);
-    const r5_1 = rsi(bars, i - 1, 5);
-    const r5_2 = rsi(bars, i - 2, 5);
-    const r5_3 = rsi(bars, i - 3, 5);
-    if (r5_0 < 30 && r5_0 < r5_1 && r5_1 < r5_2 && r5_2 < r5_3 && r5_3 > 60)
-      return { name: "📈 Triple RSI Pullback — 5-day RSI dropped 3 days straight from overbought to oversold", engulfing: bullEngulf };
-  }
-  if (side === "bearish" && i >= 4) {
-    const r5_0 = rsi(bars, i,     5);
-    const r5_1 = rsi(bars, i - 1, 5);
-    const r5_2 = rsi(bars, i - 2, 5);
-    const r5_3 = rsi(bars, i - 3, 5);
-    if (r5_0 > 70 && r5_0 > r5_1 && r5_1 > r5_2 && r5_2 > r5_3 && r5_3 < 40)
-      return { name: "📉 Triple RSI Rally — 5-day RSI rose 3 days straight from oversold to overbought", engulfing: bearEngulf };
-  }
-
-  // 3. 3-Bar Pullback: buy after 3 consecutive red (down) candles in uptrend, on first green close
-  //    Quantified: profitable since 1980s on S&P 500; adapts well to daily crypto
-  if (side === "bullish" && i >= 3) {
-    const c1 = bars[i - 3], c2 = bars[i - 2], c3 = bars[i - 1], c4 = bars[i];
-    const threeReds = c1.close < c1.open && c2.close < c2.open && c3.close < c3.open;
-    const nowGreen  = c4.close > c4.open;
-    if (threeReds && nowGreen)
-      return { name: "📈 3-Bar Pullback — 3 consecutive red candles in uptrend, first green close signals reversal", engulfing: bullEngulf };
-  }
-  if (side === "bearish" && i >= 3) {
-    const c1 = bars[i - 3], c2 = bars[i - 2], c3 = bars[i - 1], c4 = bars[i];
-    const threeGreens = c1.close > c1.open && c2.close > c2.open && c3.close > c3.open;
-    const nowRed      = c4.close < c4.open;
-    if (threeGreens && nowRed)
-      return { name: "📉 3-Bar Rally Short — 3 consecutive green candles in downtrend, first red close signals reversal", engulfing: bearEngulf };
-  }
-
-  return null;
-}
-
-function analyse(pnl: number, holdDays: number, exitReason: string, streak: number, direction: "long" | "short", entryPrice: number, entryIdx: number, ma: number[], bars: Bar[], targetReached = false): string {
-  if (exitReason === "eod") return "Still open at end of data.";
-  if (exitReason === "be") return targetReached ? "✅ Trailing stop exit — price ran past target." : "✅ Trailing stop exit — locked profit after 1R move.";
-  const maAtEntry = ma[entryIdx];
-  const maSlope5  = maAtEntry - ma[Math.max(0, entryIdx - 5)];
-  const distPct   = Math.abs(entryPrice - maAtEntry) / maAtEntry * 100;
-  const isMAligned = (direction === "long" && maSlope5 > 0) || (direction === "short" && maSlope5 < 0);
-  const recentBars = bars.slice(Math.max(0, entryIdx - 5), entryIdx);
-  const avgDayRange = recentBars.reduce((s, b) => s + (b.high - b.low) / b.close * 100, 0) / (recentBars.length || 1);
-  if (pnl > 0) return `✅ ${holdDays <= 2 ? "Fast" : "Clean"} win in ${holdDays}d${isMAligned ? " — MA trend aligned." : "."}`;
-  const reasons: string[] = [];
-  if (!isMAligned) reasons.push(`MA working against ${direction} trade`);
-  if (distPct > 8) reasons.push(`${distPct.toFixed(1)}% from 200 MA — very extended`);
-  if (avgDayRange > 0.02 * 100 * 1.5) reasons.push(`tight stop vs ${avgDayRange.toFixed(1)}% avg daily range`);
-  if (streak >= 2) reasons.push(`loss #${streak + 1} in a row`);
-  if (holdDays <= 1) reasons.push(`reversed same day`);
-  return reasons.length === 0 ? `❌ Stop hit after ${holdDays}d — stronger opposing move.` : `❌ Stop hit after ${holdDays}d. Why: ${reasons.join("; ")}.`;
-}
-
-interface Trade {
-  direction: "long" | "short";
-  entryTime: number; exitTime: number;
-  entryPrice: number; exitPrice: number;
-  slPrice: number; tpPrice: number;
-  pnl: number; size: number;
-  slDist: number;
-  trailedToBreakeven: boolean;
-  extremePrice: number;
-  isStructure: boolean;
-  targetReached: boolean;
-  exitReason: "tp" | "sl" | "be" | "eod";
-  entryReason: string; analysis: string;
-  entryIdx: number;
-}
-
-function atr(bars: Bar[], idx: number, n = 10): number {
+function atr(bars: Bar[], idx: number, n = 14): number {
   let sum = 0, count = 0;
   for (let i = Math.max(1, idx - n + 1); i <= idx; i++) {
-    const tr = Math.max(bars[i].high - bars[i].low, Math.abs(bars[i].high - bars[i - 1].close), Math.abs(bars[i].low - bars[i - 1].close));
+    const tr = Math.max(
+      bars[i].high - bars[i].low,
+      Math.abs(bars[i].high - bars[i - 1].close),
+      Math.abs(bars[i].low  - bars[i - 1].close),
+    );
     sum += tr; count++;
   }
   return count > 0 ? sum / count : bars[idx].high - bars[idx].low;
 }
 
-// Pending H&S retest: wait for price to pull back to neckline, then enter on engulfing
-interface PendingHaS {
-  dir: "long" | "short";
-  neck: number;       // neckline price to retest
-  stop: number;       // SL beyond right shoulder
-  target: number;     // measured-move TP
-  expiresBar: number; // cancel if no retest by this bar
+// ─── Weekly bars (group daily → 1 bar per ISO week) ──────────────────────────
+
+function toWeeklyBars(daily: Bar[]): Bar[] {
+  const weekly: Bar[] = [];
+  let i = 0;
+  while (i < daily.length) {
+    const chunk: Bar[] = [];
+    // Consume bars until the day-of-week wraps back to Monday (UTCDay=1)
+    // or we run out of bars.
+    const startDow = new Date(daily[i].time).getUTCDay();
+    chunk.push(daily[i++]);
+    while (i < daily.length) {
+      const dow = new Date(daily[i].time).getUTCDay();
+      if (dow === 1 && chunk.length >= 2) break; // new week starts on Monday
+      chunk.push(daily[i++]);
+    }
+    weekly.push({
+      time: chunk[0].time,
+      open: chunk[0].open,
+      high: Math.max(...chunk.map(b => b.high)),
+      low:  Math.min(...chunk.map(b => b.low)),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce((s, b) => s + b.volume, 0),
+    });
+    void startDow;
+  }
+  return weekly;
 }
 
-function runEngine(bars: Bar[], ma: number[]) {
-  const RISK        = 0.01;
-  const ATR_SL_MULT = 2.0;
-  const RR          = 1.5;
-  const CAP         = 10_000;
-  const MAX_DIST_MA = 0.08;
-  const MAX_DIST_MA_STRUCTURE = 0.15;
+// ─── Swing Detection ─────────────────────────────────────────────────────────
+// Swing High: ≥1 green candles then a red candle → peak before the red = SH
+// Swing Low : ≥1 red   candles then a green candle → trough before green = SL
+// Swings are confirmed on the bar AFTER the swing bar (1-bar lag — no look-ahead).
 
-  // Pre-compute indicator arrays once for the full bar series
-  const ema9arr  = ema(bars, 9);
-  const ema21arr = ema(bars, 21);
-  const macdData = macd(bars);
+function detectSwings(bars: Bar[]): Swing[] {
+  const isGreen = (b: Bar) => b.close >= b.open;
+  const isRed   = (b: Bar) => b.close  < b.open;
+  const raw: Swing[] = [];
+
+  for (let i = 1; i < bars.length; i++) {
+    // Swing High
+    if (isRed(bars[i]) && isGreen(bars[i - 1])) {
+      let peak = bars[i - 1].high;
+      let j = i - 2;
+      while (j >= 0 && isGreen(bars[j])) { if (bars[j].high > peak) peak = bars[j].high; j--; }
+      raw.push({ type: "high", price: peak, idx: i - 1 });
+    }
+    // Swing Low
+    if (isGreen(bars[i]) && isRed(bars[i - 1])) {
+      let trough = bars[i - 1].low;
+      let j = i - 2;
+      while (j >= 0 && isRed(bars[j])) { if (bars[j].low < trough) trough = bars[j].low; j--; }
+      raw.push({ type: "low", price: trough, idx: i - 1 });
+    }
+  }
+
+  // Merge consecutive same-type swings: keep most extreme
+  const out: Swing[] = [];
+  for (const s of raw) {
+    const last = out[out.length - 1];
+    if (last && last.type === s.type) {
+      if (s.type === "high" && s.price > last.price) out[out.length - 1] = s;
+      else if (s.type === "low" && s.price < last.price) out[out.length - 1] = s;
+    } else {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
+// ─── Market Structure State Machine ──────────────────────────────────────────
+// Bullish  = making Higher Highs + Higher Lows (HH + HL)
+// Bearish  = making Lower  Highs + Lower  Lows (LH + LL)
+// Override: close above last swing high = bullish break; below last swing low = bearish break
+
+function computeStructure(swings: Swing[], currentClose: number): StructureState {
+  const highs = swings.filter(s => s.type === "high");
+  const lows  = swings.filter(s => s.type === "low");
+
+  if (highs.length < 2 || lows.length < 2) {
+    return { trend: "neutral", activeHL: 0, activeLH: Infinity };
+  }
+
+  const h1 = highs[highs.length - 2], h2 = highs[highs.length - 1];
+  const l1 = lows[lows.length - 2],   l2 = lows[lows.length - 1];
+
+  let trend: "bullish" | "bearish" | "neutral" = "neutral";
+  if (h2.price > h1.price && l2.price > l1.price) trend = "bullish"; // HH + HL
+  else if (h2.price < h1.price && l2.price < l1.price) trend = "bearish"; // LH + LL
+  // State-machine override: close breaks last key level
+  else if (currentClose > h2.price) trend = "bullish";
+  else if (currentClose < l2.price) trend = "bearish";
+
+  return {
+    trend,
+    activeHL: l2.price,  // most recent swing low (long SL below this)
+    activeLH: h2.price,  // most recent swing high (short SL above this)
+  };
+}
+
+// ─── Score a Timeframe (0–60 pts) ────────────────────────────────────────────
+// 1. Trend aligned           10
+// 2. AOI + rejection         10
+// 3. Touch of 50 EMA          5
+// 4. Psychological round #    5
+// 5. Rejection from structure 10
+// 6. Engulfing at structure   10
+// 7. H&S break               10
+
+function scoreTimeframe(
+  bars: Bar[],
+  idx: number,
+  direction: "long" | "short",
+  ema50arr: number[],
+  swings: Swing[],
+  structure: StructureState,
+): number {
+  if (idx < 5) return 0;
+  let score = 0;
+
+  const b     = bars[idx];
+  const close = b.close;
+  const open  = b.open;
+  const ema50 = ema50arr[Math.min(idx, ema50arr.length - 1)];
+  const recentSw = swings.filter(s => s.idx < idx && s.idx >= idx - 80);
+  const prevH    = recentSw.filter(s => s.type === "high");
+  const prevL    = recentSw.filter(s => s.type === "low");
+
+  // 1. Trend aligned
+  if ((direction === "long"  && structure.trend === "bullish") ||
+      (direction === "short" && structure.trend === "bearish")) score += 10;
+
+  // 2. AOI + rejection candle (body pointing trade direction, near key level)
+  const nearAOI = recentSw.some(s => Math.abs(s.price - close) / close < 0.025);
+  const bodyDir = direction === "long" ? close > open : close < open;
+  if (nearAOI && bodyDir) score += 10;
+
+  // 3. Touch of 50 EMA
+  if (Math.abs(close - ema50) / ema50 < 0.015) score += 5;
+
+  // 4. Psychological round number
+  const step = close > 50_000 ? 5_000 : close > 10_000 ? 1_000 : close > 1_000 ? 100 : 50;
+  const round = Math.round(close / step) * step;
+  if (Math.abs(close - round) / close < 0.005) score += 5;
+
+  // 5. Rejection from previous structure level
+  const strRejL = prevL.some(s => Math.abs(s.price - close) / close < 0.025);
+  const strRejH = prevH.some(s => Math.abs(s.price - close) / close < 0.025);
+  const strRej  = direction === "long" ? strRejL : strRejH;
+  if (strRej) score += 10;
+
+  // 6. Engulfing candle at structure
+  if (idx > 0) {
+    const prev = bars[idx - 1];
+    const bullEng = prev.close < prev.open && b.open < prev.close && close > prev.open;
+    const bearEng = prev.close > prev.open && b.open > prev.close && close < prev.open;
+    if (strRej && (direction === "long" ? bullEng : bearEng)) score += 10;
+  }
+
+  // 7. H&S break (bearish) or Inverted H&S break (bullish)
+  if (direction === "short" && prevH.length >= 3) {
+    const [ls, head, rs] = prevH.slice(-3);
+    if (head.price > ls.price && head.price > rs.price && rs.idx > ls.idx) {
+      const neck = Math.max(
+        Math.min(...bars.slice(ls.idx, head.idx + 1).map(x => x.low)),
+        Math.min(...bars.slice(head.idx, rs.idx + 1).map(x => x.low)),
+      );
+      if (close < neck * 1.005 && head.price - neck >= neck * 0.03) score += 10;
+    }
+  }
+  if (direction === "long" && prevL.length >= 3) {
+    const [ls, head, rs] = prevL.slice(-3);
+    if (head.price < ls.price && head.price < rs.price && rs.idx > ls.idx) {
+      const neck = Math.min(
+        Math.max(...bars.slice(ls.idx, head.idx + 1).map(x => x.high)),
+        Math.max(...bars.slice(head.idx, rs.idx + 1).map(x => x.high)),
+      );
+      if (close > neck * 0.995 && neck - head.price >= head.price * 0.03) score += 10;
+    }
+  }
+
+  return Math.min(score, 60);
+}
+
+// ─── Entry Signal: Bullish/Bearish Engulfing OR Shift of Structure ────────────
+
+function detectEntrySignal(bars: Bar[], idx: number, direction: "long" | "short", swings: Swing[]): boolean {
+  if (idx < 3) return false;
+  const prev = bars[idx - 1], curr = bars[idx];
+
+  // Engulfing
+  const bullEng = prev.close < prev.open && curr.open < prev.close && curr.close > prev.open;
+  const bearEng = prev.close > prev.open && curr.open > prev.close && curr.close < prev.open;
+  if (direction === "long"  && bullEng) return true;
+  if (direction === "short" && bearEng) return true;
+
+  // Shift of Structure: close breaks the most recent local swing in trade direction
+  // (after a pullback, first close above the last pullback swing high = SoS long)
+  const recent = swings.filter(s => s.idx >= idx - 10 && s.idx < idx);
+  if (direction === "long") {
+    const lastSH = recent.filter(s => s.type === "high").at(-1);
+    if (lastSH && curr.close > lastSH.price) return true;
+  } else {
+    const lastSL = recent.filter(s => s.type === "low").at(-1);
+    if (lastSL && curr.close < lastSL.price) return true;
+  }
+
+  return false;
+}
+
+// ─── Main Engine ──────────────────────────────────────────────────────────────
+
+function runEngine(bars: Bar[]) {
+  const RISK = 0.01;   // 1% risk per trade
+  const RR   = 3.0;    // 1:3 risk-reward
+  const CAP  = 10_000;
+
+  // Pre-compute daily indicators
+  const dailyEma50 = ema(bars, 50);
+  const dailySwings = detectSwings(bars);
+
+  // Pre-compute weekly bars + indicators
+  const weeklyBars   = toWeeklyBars(bars);
+  const weeklyEma50  = ema(weeklyBars, 50);
+  const weeklySwings = detectSwings(weeklyBars);
+
+  // Map each daily bar index → weekly bar index (which week does this day belong to)
+  const dailyToWeeklyIdx: number[] = bars.map(b => {
+    let wi = weeklyBars.findIndex((w, i) => {
+      const nextW = weeklyBars[i + 1];
+      return b.time >= w.time && (!nextW || b.time < nextW.time);
+    });
+    return Math.max(0, wi);
+  });
 
   const trades: Trade[]   = [];
   const signals: object[] = [];
   let balance    = CAP;
   let open: Trade | null  = null;
-  let lossStreak = 0;
   let slCooldown = 0;
-  let pendingHaS: PendingHaS | null = null; // waiting for neckline retest
 
-  for (let i = 205; i < bars.length; i++) {
+  for (let i = 60; i < bars.length - 1; i++) {
     const bar = bars[i];
     if (slCooldown > 0) slCooldown--;
 
+    // ── Exit management ─────────────────────────────────────────────────────
     if (open) {
-      open.extremePrice = open.direction === "long" ? Math.max(open.extremePrice, bar.high) : Math.min(open.extremePrice, bar.low);
-      const favMove = open.direction === "long" ? open.extremePrice - open.entryPrice : open.entryPrice - open.extremePrice;
-      if (open.isStructure && !open.targetReached) {
-        if ((open.direction === "long" ? bar.high >= open.tpPrice : bar.low <= open.tpPrice)) open.targetReached = true;
-      }
-      // Active trailing: once in 1R profit, trail at extremePrice ± 1.5×ATR14
-      // This locks in profits progressively rather than just sitting at breakeven
+      open.extremePrice = open.direction === "long"
+        ? Math.max(open.extremePrice, bar.high)
+        : Math.min(open.extremePrice, bar.low);
+      const favMove = open.direction === "long"
+        ? open.extremePrice - open.entryPrice
+        : open.entryPrice - open.extremePrice;
+
+      // Active trailing: once 1R in profit, trail at extremePrice ± 1.5×ATR14
       if (favMove >= open.slDist) {
-        const barAtr14 = atr(bars, i, 14);
-        const trailStop = open.direction === "long"
-          ? open.extremePrice - barAtr14 * 1.5
-          : open.extremePrice + barAtr14 * 1.5;
+        const barAtr = atr(bars, i, 14);
+        const trail  = open.direction === "long"
+          ? open.extremePrice - barAtr * 1.5
+          : open.extremePrice + barAtr * 1.5;
         open.slPrice = open.direction === "long"
-          ? Math.max(open.slPrice, trailStop)
-          : Math.min(open.slPrice, trailStop);
+          ? Math.max(open.slPrice, trail)
+          : Math.min(open.slPrice, trail);
         open.trailedToBreakeven = true;
       }
+
       let closed = false;
       if (open.direction === "long") {
         if (bar.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
-        if (!open.isStructure && bar.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
+        if (bar.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       } else {
         if (bar.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
-        if (!open.isStructure && bar.low <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
+        if (bar.low  <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
       }
+
       if (closed) {
         open.exitTime = bar.time;
-        const mult = open.direction === "long" ? 1 : -1;
-        open.pnl   = (open.exitPrice - open.entryPrice) * mult * open.size;
-        balance   += open.pnl;
+        open.pnl = (open.exitPrice - open.entryPrice) * (open.direction === "long" ? 1 : -1) * open.size;
+        balance += open.pnl;
         const holdD = Math.round((open.exitTime - open.entryTime) / 86_400_000);
-        open.analysis = analyse(open.pnl, holdD, open.exitReason, lossStreak, open.direction, open.entryPrice, open.entryIdx, ma, bars, open.targetReached);
-        if (open.pnl < 0) { lossStreak++; if (open.exitReason === "sl") slCooldown = 10; } else lossStreak = 0;
+        open.analysis = open.pnl > 0
+          ? `✅ ${holdD}d hold — ${open.exitReason === "tp" ? "TP hit (1:3)" : "trailing stop exit"}.`
+          : `❌ SL hit after ${holdD}d.`;
+        if (open.pnl < 0 && open.exitReason === "sl") slCooldown = 5;
         signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : open.exitReason === "be" ? "Exit BE" : "Exit SL", price: open.exitPrice });
         trades.push(open);
         open = null;
@@ -449,166 +385,97 @@ function runEngine(bars: Bar[], ma: number[]) {
 
     if (slCooldown > 0) continue;
 
-    // ── Pending H&S retest check ──────────────────────────────────────────────
-    // After neckline break, wait for price to pull back to the neckline and
-    // form a confirmation engulfing candle before entering.
-    if (pendingHaS && !open) {
-      if (i > pendingHaS.expiresBar) {
-        pendingHaS = null; // retest never came — cancel
-      } else {
-        const prev = bars[i - 1];
-        const bearEngulf = prev.close > prev.open && bar.open > prev.close && bar.close < prev.open;
-        const bullEngulf = prev.close < prev.open && bar.open < prev.close && bar.close > prev.open;
+    // ── Step 3: Daily EMA 50 determines allowed direction ───────────────────
+    const closeAboveEma50 = bar.close > dailyEma50[i];
+    const dir: "long" | "short" = closeAboveEma50 ? "long" : "short";
 
-        if (pendingHaS.dir === "short") {
-          // Price must retest neckline from below — touch within 1.5% but close must stay BELOW neckline
-          const retested = bar.high >= pendingHaS.neck * 0.985 && bar.close < pendingHaS.neck;
-          if (retested && bearEngulf && i + 1 < bars.length) {
-            const entryBar   = bars[i + 1];
-            const entryPrice = entryBar.open;
-            const slDist     = Math.abs(pendingHaS.stop - entryPrice);
-            if (slDist > 0 && pendingHaS.stop > entryPrice && pendingHaS.target < entryPrice) {
-              const size = (balance * RISK) / slDist;
-              open = {
-                direction: "short", entryTime: entryBar.time, exitTime: 0,
-                entryPrice, exitPrice: 0,
-                slPrice: pendingHaS.stop, tpPrice: pendingHaS.target,
-                slDist, trailedToBreakeven: false, extremePrice: entryPrice,
-                isStructure: true, targetReached: false, size, pnl: 0, exitReason: "eod",
-                entryIdx: i + 1,
-                entryReason: `📉 H&S retest short · Neckline @ $${pendingHaS.neck.toFixed(0)} · Bearish engulf on retest · SL ${(slDist / entryPrice * 100).toFixed(1)}%`,
-                analysis: "",
-              };
-              signals.push({ timestamp: new Date(entryBar.time).toISOString(), direction: "short", type: "Entry", price: entryPrice });
-              pendingHaS = null;
-            }
-          }
-        } else {
-          // Inverted H&S: price must retest neckline from above (pull back to within 2%)
-          const retested = bar.low <= pendingHaS.neck * 1.02;
-          if (retested && bullEngulf && i + 1 < bars.length) {
-            const entryBar   = bars[i + 1];
-            const entryPrice = entryBar.open;
-            const slDist     = Math.abs(entryPrice - pendingHaS.stop);
-            if (slDist > 0 && pendingHaS.stop < entryPrice && pendingHaS.target > entryPrice) {
-              const size = (balance * RISK) / slDist;
-              open = {
-                direction: "long", entryTime: entryBar.time, exitTime: 0,
-                entryPrice, exitPrice: 0,
-                slPrice: pendingHaS.stop, tpPrice: pendingHaS.target,
-                slDist, trailedToBreakeven: false, extremePrice: entryPrice,
-                isStructure: true, targetReached: false, size, pnl: 0, exitReason: "eod",
-                entryIdx: i + 1,
-                entryReason: `📈 Inv H&S retest long · Neckline @ $${pendingHaS.neck.toFixed(0)} · Bullish engulf on retest · SL ${(slDist / entryPrice * 100).toFixed(1)}%`,
-                analysis: "",
-              };
-              signals.push({ timestamp: new Date(entryBar.time).toISOString(), direction: "long", type: "Entry", price: entryPrice });
-              pendingHaS = null;
-            }
-          }
-        }
-      }
-      if (open) continue; // just entered via retest
-    }
+    // ── Compute Daily structure ──────────────────────────────────────────────
+    const dailySw   = dailySwings.filter(s => s.idx < i);
+    const dailySt   = computeStructure(dailySw, bar.close);
 
-    const aboveMA = bar.close > ma[i];
-    const side    = aboveMA ? "bullish" : "bearish";
-    const dir: "long" | "short" = aboveMA ? "long" : "short";
+    // ── Compute Weekly structure ─────────────────────────────────────────────
+    const wi        = dailyToWeeklyIdx[i];
+    const weeklySw  = weeklySwings.filter(s => s.idx <= wi);
+    const weeklySt  = computeStructure(weeklySw, weeklyBars[wi]?.close ?? bar.close);
 
-    // ── FILTER 1: EMA9 must align with trade direction (micro-trend confirmation) ──
-    // This is the single most powerful filter — it removes trades where the short-term
-    // trend is working against us even if the 200 MA is pointing the right way.
-    // Exception: H&S and Double/Triple Top can be near crossover so we allow ±0.3% leeway
-    const e9 = ema9arr[i], e21 = ema21arr[i];
-    const ema9aligned = dir === "long" ? e9 >= e21 * 0.997 : e9 <= e21 * 1.003;
-    if (!ema9aligned) continue;
+    // ── Compute 4H-proxy structure (last 30 daily bars) ──────────────────────
+    const startIdx4H = Math.max(0, i - 30);
+    const proxy4H    = bars.slice(startIdx4H, i + 1);
+    const swings4H   = detectSwings(proxy4H);
+    const ema4H      = ema(proxy4H, Math.min(20, proxy4H.length - 1));
+    const struct4H   = computeStructure(swings4H, bar.close);
 
-    const patternResult = detectPattern(bars, i, side, ema9arr, ema21arr, macdData);
-    if (!patternResult) continue;
+    // ── Step 4: Higher timeframe confirmation ────────────────────────────────
+    const weeklyAligned = dir === "long" ? weeklySt.trend === "bullish" : weeklySt.trend === "bearish";
+    const dailyAligned  = dir === "long" ? dailySt.trend === "bullish"  : dailySt.trend === "bearish";
+    const proxy4HAligned = dir === "long" ? struct4H.trend === "bullish" : struct4H.trend === "bearish";
 
-    const isStructurePattern = patternResult.name.includes("Head") || patternResult.name.includes("Double") || patternResult.name.includes("Triple");
-    const isCandlePattern    = !isStructurePattern;
-    const isInvertedHaS      = !!patternResult.isInvertedHaS;
+    // Accept: (Weekly + Daily aligned) OR (Daily + 4H aligned)
+    const htfOk = (weeklyAligned && dailyAligned) || (dailyAligned && proxy4HAligned);
+    if (!htfOk) continue;
 
-    const barRsi   = rsi(bars, i);
-    const volRatio = volumeRatio(bars, i);
+    // ── Step 5: Score each timeframe ─────────────────────────────────────────
+    const weeklyScore = scoreTimeframe(weeklyBars, wi, dir, weeklyEma50, weeklySw, weeklySt);
+    const dailyScore  = scoreTimeframe(bars, i, dir, dailyEma50, dailySw, dailySt);
+    const score4H     = scoreTimeframe(proxy4H, proxy4H.length - 1, dir, ema4H, swings4H, struct4H);
 
-    // ── FILTER 2: RSI extreme gate — don't buy overbought, don't sell oversold ──
-    const rsiExtreme = dir === "long" ? barRsi > 75 : barRsi < 25;
-    if (rsiExtreme) continue;
+    // ── Step 6: Trade requirements ────────────────────────────────────────────
+    const scores   = [weeklyScore, dailyScore, score4H];
+    const passing  = scores.filter(s => s >= 45).length;
+    const total    = scores.reduce((a, b) => a + b, 0);
 
-    // ── FILTER 3: Distance from 200 MA cap (avoid over-extended moves) ──
-    const distFromMA = Math.abs(bar.close - ma[i]) / ma[i];
-    if (distFromMA > (isStructurePattern ? MAX_DIST_MA_STRUCTURE : MAX_DIST_MA)) continue;
+    if (passing < 2 || total < 120) continue;
 
-    // ── FILTER 4: MACD histogram + RSI + volume confirmation (need ≥ 1) ──
-    const macdHistAligned = macdData
-      ? (dir === "long" ? macdData.hist[i] > 0 : macdData.hist[i] < 0)
-      : false;
-    const confirmations: string[] = [];
-    if (macdHistAligned)                  confirmations.push("MACD");
-    if (dir === "long"  && barRsi < 50)   confirmations.push(`RSI ${barRsi.toFixed(0)}`);
-    if (dir === "short" && barRsi > 50)   confirmations.push(`RSI ${barRsi.toFixed(0)}`);
-    if (volRatio >= 1.2)                  confirmations.push(`vol ${volRatio.toFixed(1)}×`);
-    if (patternResult.engulfing)          confirmations.push("engulf");
-    // Structure patterns are strong enough on their own; quant signals already ARE confirmations
-    const needsConf = isCandlePattern && !patternResult.name.includes("EMA") && !patternResult.name.includes("MACD") && !patternResult.name.includes("RSI") && !patternResult.name.includes("Pullback") && !patternResult.name.includes("Crossover");
-    if (needsConf && confirmations.length === 0) continue;
+    // ── Step 7: Entry signal on current bar ───────────────────────────────────
+    if (!detectEntrySignal(bars, i, dir, dailySw)) continue;
 
-    if (i + 1 >= bars.length) continue;
+    // ── Build trade ──────────────────────────────────────────────────────────
     const entryBar   = bars[i + 1];
     const entryPrice = entryBar.open;
     const entryTime  = entryBar.time;
 
-    const barAtr = atr(bars, i);
-    let slPrice: number, tpPrice: number, slDist: number;
-    const isHaS = patternResult.name.includes("Head & Shoulders") || patternResult.name.includes("Inv H&S") || patternResult.name.includes("Inverted H&S");
-
-    if (patternResult.stop != null && patternResult.target != null) {
-      const rawSl = dir === "short" ? patternResult.stop * 1.005 : patternResult.stop * 0.995;
-      const rawTp = patternResult.target;
-
-      // H&S: don't enter on neckline break — set pending retest instead
-      if (isHaS && !pendingHaS) {
-        const neck = bars[i].close; // approximate neckline as current close (already broke it)
-        const validShort = dir === "short" && rawSl > bars[i].close && rawTp < bars[i].close;
-        const validLong  = dir === "long"  && rawSl < bars[i].close && rawTp > bars[i].close;
-        if (validShort || validLong) {
-          pendingHaS = { dir, neck: rawSl > bars[i].close ? bars[i].close * 1.01 : bars[i].close * 0.99, stop: rawSl, target: rawTp, expiresBar: i + 15 };
-          signals.push({ timestamp: new Date(bars[i].time).toISOString(), direction: dir, type: "Pending H&S retest", price: bars[i].close });
-        }
-        continue; // do not enter now
-      }
-
-      slPrice = rawSl;
-      tpPrice = rawTp;
-      const validShort = dir === "short" && slPrice > entryPrice && tpPrice < entryPrice;
-      const validLong  = dir === "long"  && slPrice < entryPrice && tpPrice > entryPrice;
-      if (!validShort && !validLong) continue;
-      slDist = Math.abs(slPrice - entryPrice);
+    // SL: just beyond the active HL (long) or LH (short)
+    let slPrice: number;
+    if (dir === "long") {
+      slPrice = dailySt.activeHL > 0 ? dailySt.activeHL * 0.995 : entryPrice - atr(bars, i) * 2;
     } else {
-      slDist  = barAtr * ATR_SL_MULT;
-      slPrice = dir === "long"  ? entryPrice - slDist : entryPrice + slDist;
-      tpPrice = dir === "long"  ? entryPrice + slDist * RR : entryPrice - slDist * RR;
+      slPrice = dailySt.activeLH < Infinity ? dailySt.activeLH * 1.005 : entryPrice + atr(bars, i) * 2;
     }
-    const size = slDist > 0 ? (balance * RISK) / slDist : 0;
+
+    const slDist = Math.abs(entryPrice - slPrice);
+    if (slDist <= 0 || slDist / entryPrice > 0.20) continue; // sanity check
+
+    const tpPrice = dir === "long"
+      ? entryPrice + slDist * RR
+      : entryPrice - slDist * RR;
+
+    const size = (balance * RISK) / slDist;
     if (size <= 0) continue;
 
+    const scoreStr = `W:${weeklyScore} D:${dailyScore} 4H:${score4H} total:${total}`;
+    const stateStr = `W:${weeklySt.trend} D:${dailySt.trend}`;
+
     open = {
-      direction: dir, entryTime, exitTime: 0,
-      entryPrice, exitPrice: 0, slPrice, tpPrice,
+      direction: dir,
+      entryTime, exitTime: 0,
+      entryPrice, exitPrice: 0,
+      slPrice, tpPrice,
       slDist, trailedToBreakeven: false, extremePrice: entryPrice,
-      isStructure: patternResult.stop != null && patternResult.target != null,
-      targetReached: false, size, pnl: 0, exitReason: "eod", entryIdx: i + 1,
-      entryReason: `${patternResult.name} · ${dir === "long" ? "Above" : "Below"} 200MA · ${confirmations.join(" · ")} · SL ${(slDist / entryPrice * 100).toFixed(1)}%`,
+      exitReason: "eod",
+      entryReason: `${dir === "long" ? "📈 LONG" : "📉 SHORT"} · Scores ${scoreStr} · Structure ${stateStr} · SL @ $${slPrice.toFixed(0)} (${(slDist / entryPrice * 100).toFixed(1)}%) · TP 1:3`,
       analysis: "",
+      entryIdx: i + 1,
+      pnl: 0, size,
     };
     signals.push({ timestamp: new Date(entryTime).toISOString(), direction: dir, type: "Entry", price: entryPrice });
   }
 
+  // Close any open trade at end of data
   if (open) {
     const last = bars[bars.length - 1];
-    open.exitTime = last.time; open.exitPrice = last.close; open.exitReason = "eod";
+    open.exitTime  = last.time;
+    open.exitPrice = last.close;
+    open.exitReason = "eod";
     open.pnl = (open.exitPrice - open.entryPrice) * (open.direction === "long" ? 1 : -1) * open.size;
     open.analysis = "Still open at end of data.";
     balance += open.pnl;
@@ -617,6 +484,8 @@ function runEngine(bars: Bar[], ma: number[]) {
 
   return { trades, signals };
 }
+
+// ─── Stats ────────────────────────────────────────────────────────────────────
 
 function stats(trades: Trade[]) {
   const wins   = trades.filter(t => t.pnl > 0);
@@ -646,15 +515,13 @@ function stats(trades: Trade[]) {
   };
 }
 
+// ─── POST Handler ─────────────────────────────────────────────────────────────
+
 export async function POST(req: NextRequest) {
   try {
     const { symbol = "BTC", limit = 730, interval = "1d" } = await req.json();
-    const bars    = await fetchBars(symbol, interval, limit + 200);
-    const ma      = sma200(bars);
-    const ema9arr  = ema(bars, 9);
-    const ema21arr = ema(bars, 21);
-    const macdData = macd(bars);
-    const { trades, signals } = runEngine(bars, ma);
+    const bars = await fetchBars(symbol, interval, limit + 200);
+    const { trades, signals } = runEngine(bars);
     return NextResponse.json({
       ...stats(trades), signals,
       trades: trades.map(t => ({
