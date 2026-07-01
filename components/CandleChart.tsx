@@ -129,31 +129,51 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       maSeries.setData(maData);
     }
 
-    // Add signal markers
-    if (signals.length > 0) {
-      const markers: SeriesMarker<Time>[] = signals
-        .map(s => {
-          const isLong  = s.direction === "long";
-          const isEntry = s.type.toLowerCase().includes("entry");
-          const isTP    = s.type.toLowerCase().includes("tp");
-          const isSL    = s.type.toLowerCase().includes("sl");
+    // Add signal + swing markers
+    const allMarkers: SeriesMarker<Time>[] = signals
+      .map(s => {
+        const isLong  = s.direction === "long";
+        const isSH    = s.type === "Swing High";
+        const isSL_sw = s.type === "Swing Low";
+        const isEntry = s.type.toLowerCase().includes("entry");
+        const isTP    = s.type.toLowerCase().includes("tp");
 
-          return {
-            time:     Math.floor(s.time / 1000) as Time,
-            position: isLong ? "belowBar" : "aboveBar",
-            color:    isEntry
-              ? (isLong ? "#10b981" : "#ef4444")
-              : isTP ? "#3b82f6" : "#f59e0b",
-            shape: isEntry
-              ? (isLong ? "arrowUp" : "arrowDown")
-              : "circle",
-            text: s.type,
-            size: isEntry ? 2 : 1,
-          } as SeriesMarker<Time>;
-        })
-        .sort((a, b) => (a.time as number) - (b.time as number));
+        // Swing High: orange circle above bar (no text — just the dot)
+        if (isSH) return {
+          time:     Math.floor(s.time / 1000) as Time,
+          position: "aboveBar",
+          color:    "#f97316",
+          shape:    "circle",
+          text:     "SH",
+          size:     1,
+        } as SeriesMarker<Time>;
 
-      createSeriesMarkers(series, markers);
+        // Swing Low: blue circle below bar
+        if (isSL_sw) return {
+          time:     Math.floor(s.time / 1000) as Time,
+          position: "belowBar",
+          color:    "#3b82f6",
+          shape:    "circle",
+          text:     "SL",
+          size:     1,
+        } as SeriesMarker<Time>;
+
+        // Regular trade signals
+        return {
+          time:     Math.floor(s.time / 1000) as Time,
+          position: isLong ? "belowBar" : "aboveBar",
+          color:    isEntry
+            ? (isLong ? "#10b981" : "#ef4444")
+            : isTP ? "#3b82f6" : "#f59e0b",
+          shape:    isEntry ? (isLong ? "arrowUp" : "arrowDown") : "circle",
+          text:     s.type,
+          size:     isEntry ? 2 : 1,
+        } as SeriesMarker<Time>;
+      })
+      .sort((a, b) => (a.time as number) - (b.time as number));
+
+    if (allMarkers.length > 0) {
+      createSeriesMarkers(series, allMarkers);
     }
 
     chart.timeScale().fitContent();
