@@ -17,7 +17,8 @@ const STEPS = [
   { id: 2, label: "Market Structure", desc: "Close above LH = bullish · close below HL = bearish · only closes count" },
   { id: 3, label: "Daily EMA Filter", desc: "Close above 50 EMA = only longs · below = only shorts · never an entry signal" },
   { id: 4, label: "HTF Confirmation", desc: "Long: Weekly+Daily OR Daily+4H bullish · Short: same but bearish · else no trade" },
-  // Step 5 and beyond will be added in future iterations
+  { id: 5, label: "TF Scoring", desc: "Weekly / Daily / 4H each scored 0-60 on 7 criteria" },
+  // Step 6 and beyond will be added in future iterations
 ];
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -159,6 +160,25 @@ interface HtfNow {
   h4_available: boolean;
 }
 
+interface ScoreBreakdown {
+  trend: number; aoi: number; ema: number; round: number;
+  structRej: number; engulf: number; hns: number; total: number;
+}
+
+interface ScoreNow {
+  direction: "long" | "short";
+  weekly: ScoreBreakdown;
+  daily:  ScoreBreakdown;
+  h4:     ScoreBreakdown | null;
+}
+
+interface ScorePoint {
+  time: number; close: number;
+  w: number; d: number; h: number;
+  total: number; pass: boolean;
+  dir: "long" | "short";
+}
+
 export default function BacktestLoopPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
   const [candles,  setCandles]  = useState<Candle[]>([]);
@@ -183,6 +203,8 @@ export default function BacktestLoopPage() {
   const [allowedDir,   setAllowedDir]   = useState<"long" | "short" | null>(null);
   const [htf,          setHtf]          = useState<HtfPoint[]>([]);
   const [htfNow,       setHtfNow]       = useState<HtfNow | null>(null);
+  const [scoreNow,     setScoreNow]     = useState<ScoreNow | null>(null);
+  const [scoreHist,    setScoreHist]    = useState<ScorePoint[]>([]);
 
   const loadCandles = useCallback(async (sym: string, lim: number) => {
     setLoading(true);
@@ -216,6 +238,8 @@ export default function BacktestLoopPage() {
         setAllowedDir(d.allowed_direction ?? null);
         setHtf(d.htf ?? []);
         setHtfNow(d.htf_now ?? null);
+        setScoreNow(d.score_now ?? null);
+        setScoreHist(d.score_history ?? []);
       }
     } catch {}
     setSwingLoading(false);
@@ -259,7 +283,7 @@ export default function BacktestLoopPage() {
   const markers: SignalMarker[] =
     activeStep === 1 ? swingMarkers
     : activeStep === 2 ? [...swingMarkers, ...breakMarkers]
-    : activeStep === 3 || activeStep === 4 ? []
+    : activeStep === 3 || activeStep === 4 || activeStep === 5 ? []
     : result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
         time: new Date(s.timestamp).getTime(), direction: s.direction, type: s.type, price: s.price,
       })) ?? [];
@@ -272,6 +296,8 @@ export default function BacktestLoopPage() {
     activeStep === 2 ? regime.map(p => ({ time: p.time, value: p.close, trend: p.trend }))
     : activeStep === 3 ? emaData.map(p => ({ time: p.time, value: p.value, trend: (p.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish" }))
     : activeStep === 4 ? htf.map(p => ({ time: p.time, value: p.close, trend: (p.allowed === "long" ? "bullish" : p.allowed === "short" ? "bearish" : "neutral") as "bullish" | "bearish" | "neutral" }))
+    // Step 5: line coloured by score pass — green/red when 2 of 3 TFs >= 45 AND total >= 120 (direction from EMA), grey otherwise
+    : activeStep === 5 ? scoreHist.map(p => ({ time: p.time, value: p.close, trend: (p.pass ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
     : undefined;
 
   const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
@@ -571,6 +597,73 @@ export default function BacktestLoopPage() {
             </div>
           </div>
         )}
+
+        {/* Step 5 info panel */}
+        {activeStep === 5 && (
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 5 — Score Every Timeframe (0–60 points each)</p>
+              <div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                Weekly, Daily and 4H each get scored on 7 criteria. Direction comes from the step 3 EMA filter
+                {scoreNow && <> — currently scoring for <strong style={{ color: scoreNow.direction === "long" ? "#10b981" : "#ef4444" }}>{scoreNow.direction.toUpperCase()}</strong> setups</>}.
+                The coloured line on the chart shows days where the scores would pass step 6 (2 of 3 timeframes ≥ 45 <em>and</em> total ≥ 120).
+              </div>
+              {scoreHist.length > 0 && (
+                <p style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+                  Score passes in this period: <strong style={{ color: "#f1f5f9" }}>{scoreHist.filter(p => p.pass).length}</strong> of {scoreHist.length} days
+                </p>
+              )}
+            </div>
+
+            {swingLoading ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#64748b", fontSize: 14 }}>
+                <span style={{ width: 14, height: 14, border: "2px solid #334155", borderTopColor: "#10b981", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+                Scoring…
+              </div>
+            ) : scoreNow && (
+              <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, overflow: "hidden" }}>
+                <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #334155" }}>
+                      <th style={{ padding: "8px 14px", textAlign: "left", color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", fontSize: 10 }}>Criterion (max)</th>
+                      {["Weekly", "Daily", "4H"].map(tf => (
+                        <th key={tf} style={{ padding: "8px 14px", textAlign: "center", color: "#94a3b8", fontWeight: 800 }}>{tf}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {([
+                      ["Trend aligned", "trend", 10],
+                      ["AOI + rejection", "aoi", 10],
+                      ["Touch of 50 EMA", "ema", 5],
+                      ["Round number reject", "round", 5],
+                      ["Structure rejection", "structRej", 10],
+                      ["Engulfing at structure", "engulf", 10],
+                      ["H&S break + retest", "hns", 10],
+                    ] as const).map(([label, key, max]) => (
+                      <tr key={key} style={{ borderBottom: "1px solid #273449" }}>
+                        <td style={{ padding: "6px 14px", color: "#94a3b8" }}>{label} <span style={{ color: "#475569" }}>({max})</span></td>
+                        {[scoreNow.weekly, scoreNow.daily, scoreNow.h4].map((tf, i) => (
+                          <td key={i} style={{ padding: "6px 14px", textAlign: "center", fontWeight: 800, color: tf == null ? "#475569" : tf[key] > 0 ? "#10b981" : "#475569" }}>
+                            {tf == null ? "—" : tf[key] > 0 ? `+${tf[key]}` : "0"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    <tr style={{ background: "#0f172a" }}>
+                      <td style={{ padding: "8px 14px", color: "#f1f5f9", fontWeight: 800 }}>TOTAL / 60</td>
+                      {[scoreNow.weekly, scoreNow.daily, scoreNow.h4].map((tf, i) => (
+                        <td key={i} style={{ padding: "8px 14px", textAlign: "center", fontWeight: 800, fontSize: 15, color: tf == null ? "#475569" : tf.total >= 45 ? "#10b981" : "#ef4444" }}>
+                          {tf == null ? "—" : tf.total}
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Chart info bar ── */}
@@ -662,6 +755,33 @@ export default function BacktestLoopPage() {
               </p>
             </div>
           </>
+        ) : activeStep === 5 ? (
+          <>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#ec4899" }}>Step 5: TF Scoring</p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>W / D / 4H Now</p>
+              <p className="num" style={{ fontSize: 16, fontWeight: 800 }}>
+                {scoreNow ? (
+                  <>
+                    <span style={{ color: scoreNow.weekly.total >= 45 ? "var(--teal)" : "var(--muted)" }}>{scoreNow.weekly.total}</span>
+                    {" · "}
+                    <span style={{ color: scoreNow.daily.total >= 45 ? "var(--teal)" : "var(--muted)" }}>{scoreNow.daily.total}</span>
+                    {" · "}
+                    <span style={{ color: scoreNow.h4 && scoreNow.h4.total >= 45 ? "var(--teal)" : "var(--muted)" }}>{scoreNow.h4?.total ?? "—"}</span>
+                  </>
+                ) : "—"}
+              </p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Combined</p>
+              <p className="num" style={{ fontSize: 16, fontWeight: 800, color: scoreNow && (scoreNow.weekly.total + scoreNow.daily.total + (scoreNow.h4?.total ?? 0)) >= 120 ? "var(--teal)" : "var(--muted)" }}>
+                {scoreNow ? `${scoreNow.weekly.total + scoreNow.daily.total + (scoreNow.h4?.total ?? 0)} / 180` : "—"}
+              </p>
+            </div>
+          </>
         ) : (
           // Normal backtest stats
           <>
@@ -713,6 +833,15 @@ export default function BacktestLoopPage() {
           ) : activeStep === 4 ? (
             <>
               {[{ c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" }].map(x => (
+                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
+                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
+                </div>
+              ))}
+            </>
+          ) : activeStep === 5 ? (
+            <>
+              {[{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }].map(x => (
                 <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
                   <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>

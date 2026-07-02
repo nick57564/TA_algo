@@ -287,6 +287,146 @@ function computeStructure(
   return { regime, events, finalTrend: trend };
 }
 
+// ─── Step 5: Score a timeframe (0–60 points) ─────────────────────────────────
+// 1. Trend aligned                      10
+// 2. AOI + rejection candle             10
+// 3. Touch of the 50 EMA                 5
+// 4. Psychological round number reject   5
+// 5. Rejection from previous structure  10
+// 6. Engulfing candle at structure      10
+// 7. Head & Shoulders break + retest    10
+
+interface ScoreBreakdown {
+  trend: number;      // 10
+  aoi: number;        // 10
+  ema: number;        // 5
+  round: number;      // 5
+  structRej: number;  // 10
+  engulf: number;     // 10
+  hns: number;        // 10
+  total: number;      // 0–60
+}
+
+function scoreTimeframe(
+  bars: Bar[],
+  idx: number,
+  dir: "long" | "short",
+  emaArr: number[],
+  swings: ReturnType<typeof detectSwings>,
+  trendAtIdx: Trend,
+  tol = 0.02,           // "near a level" tolerance
+): ScoreBreakdown {
+  const out: ScoreBreakdown = { trend: 0, aoi: 0, ema: 0, round: 0, structRej: 0, engulf: 0, hns: 0, total: 0 };
+  if (idx < 2 || bars.length === 0) return out;
+
+  const b     = bars[idx];
+  const prev  = bars[idx - 1];
+  const close = b.close;
+
+  // Only swings CONFIRMED by this bar (flip bar printed) count as known levels
+  const known  = swings.filter(s => s.barIdx + 1 <= idx);
+  const levels = known.slice(-10); // last 10 structure levels = areas of interest
+  const kHighs = known.filter(s => s.type === "high");
+  const kLows  = known.filter(s => s.type === "low");
+
+  // 1. Trend aligned (10)
+  if ((dir === "long" && trendAtIdx === "bullish") || (dir === "short" && trendAtIdx === "bearish")) out.trend = 10;
+
+  // Rejection candle definition: candle pierced against the trade direction
+  // but CLOSED back in the direction (long: close in upper half of range;
+  // short: close in lower half of range)
+  const range = b.high - b.low;
+  const rejectionCandle = range > 0 && (
+    dir === "long"  ? (close - b.low) / range >= 0.6
+                    : (b.high - close) / range >= 0.6
+  );
+
+  // 2. AOI + rejection (10): price is AT a known structure level AND shows rejection
+  const nearAOI = levels.some(s => Math.abs(s.price - close) / close < tol);
+  if (nearAOI && rejectionCandle) out.aoi = 10;
+
+  // 3. Touch of the 50 EMA (5): bar range touched the EMA
+  const emaVal = emaArr[Math.min(idx, emaArr.length - 1)];
+  if (b.low <= emaVal && emaVal <= b.high) out.ema = 5;
+
+  // 4. Psychological round number rejection (5)
+  const step  = close >= 50_000 ? 5_000 : close >= 10_000 ? 1_000 : close >= 1_000 ? 100 : close >= 100 ? 10 : 1;
+  const round = Math.round(close / step) * step;
+  const touchedRound = b.low <= round && round <= b.high;
+  if (touchedRound && (dir === "long" ? close > round : close < round)) out.round = 5;
+
+  // 5. Rejection from previous structure (10): wick pierced the level, close back on the right side
+  if (dir === "long") {
+    if (kLows.some(s => b.low <= s.price && close > s.price)) out.structRej = 10;
+  } else {
+    if (kHighs.some(s => b.high >= s.price && close < s.price)) out.structRej = 10;
+  }
+
+  // 6. Engulfing candle at previous structure (10)
+  const bullEng = prev.close < prev.open && b.open <= prev.close && close > prev.open;
+  const bearEng = prev.close > prev.open && b.open >= prev.close && close < prev.open;
+  const engulfAtLevel = levels.some(s => Math.abs(s.price - close) / close < tol * 1.5);
+  if (engulfAtLevel && (dir === "long" ? bullEng : bearEng)) out.engulf = 10;
+
+  // 7. Head & Shoulders break and retest (10)
+  if (dir === "short" && kHighs.length >= 3) {
+    const [ls, head, rs] = kHighs.slice(-3);
+    if (head.price > ls.price && head.price > rs.price) {
+      const lowsBetween = kLows.filter(s => s.barIdx > ls.barIdx && s.barIdx < rs.barIdx);
+      if (lowsBetween.length) {
+        const neck = Math.max(...lowsBetween.map(s => s.price));
+        const broke   = close < neck;
+        const retest  = b.high >= neck * (1 - tol);
+        if (broke && retest) out.hns = 10;
+      }
+    }
+  }
+  if (dir === "long" && kLows.length >= 3) {
+    const [ls, head, rs] = kLows.slice(-3);
+    if (head.price < ls.price && head.price < rs.price) {
+      const highsBetween = kHighs.filter(s => s.barIdx > ls.barIdx && s.barIdx < rs.barIdx);
+      if (highsBetween.length) {
+        const neck = Math.min(...highsBetween.map(s => s.price));
+        const broke  = close > neck;
+        const retest = b.low <= neck * (1 + tol);
+        if (broke && retest) out.hns = 10;
+      }
+    }
+  }
+
+  out.total = out.trend + out.aoi + out.ema + out.round + out.structRej + out.engulf + out.hns;
+  return out;
+}
+
+// Score with a lookback window: candle-based criteria (AOI, EMA touch, round
+// number, structure rejection, engulfing, H&S retest) count if they occurred
+// on ANY bar within the window — the way a trader reads "rejection at
+// structure" on a chart. Trend alignment is always taken from the CURRENT bar.
+function scoreTimeframeLB(
+  bars: Bar[],
+  idx: number,
+  dir: "long" | "short",
+  emaArr: number[],
+  swings: ReturnType<typeof detectSwings>,
+  trendAtIdx: Trend,
+  tol: number,
+  lookback: number,
+): ScoreBreakdown {
+  const agg: ScoreBreakdown = { trend: 0, aoi: 0, ema: 0, round: 0, structRej: 0, engulf: 0, hns: 0, total: 0 };
+  for (let j = Math.max(2, idx - lookback + 1); j <= idx; j++) {
+    const s = scoreTimeframe(bars, j, dir, emaArr, swings, trendAtIdx, tol);
+    agg.aoi       = Math.max(agg.aoi, s.aoi);
+    agg.ema       = Math.max(agg.ema, s.ema);
+    agg.round     = Math.max(agg.round, s.round);
+    agg.structRej = Math.max(agg.structRej, s.structRej);
+    agg.engulf    = Math.max(agg.engulf, s.engulf);
+    agg.hns       = Math.max(agg.hns, s.hns);
+  }
+  agg.trend = scoreTimeframe(bars, idx, dir, emaArr, swings, trendAtIdx, tol).trend;
+  agg.total = agg.trend + agg.aoi + agg.ema + agg.round + agg.structRej + agg.engulf + agg.hns;
+  return agg;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { symbol = "BTC", limit = 365, interval = "1d" } = await req.json();
@@ -305,9 +445,11 @@ export async function POST(req: NextRequest) {
     // 4H: native candles (crypto) or aggregated Yahoo 1h (GOLD/SPX);
     // smaller minimum leg because 4H swings are smaller than daily ones
     let h4Regime: { time: number; close: number; trend: Trend }[] | null = null;
+    let h4Bars: Bar[] = [];
+    let h4Swings: ReturnType<typeof detectSwings> = [];
     try {
-      const h4Bars   = await fetch4hBars(symbol, Math.min(limit, 700));
-      const h4Swings = detectSwings(h4Bars, 0.02);
+      h4Bars   = await fetch4hBars(symbol, Math.min(limit, 700));
+      h4Swings = detectSwings(h4Bars, 0.02);
       h4Regime = computeStructure(h4Bars, h4Swings).regime;
     } catch { h4Regime = null; }
 
@@ -315,13 +457,21 @@ export async function POST(req: NextRequest) {
     // then apply the confirmation rule:
     //   LONG  allowed: (Weekly AND Daily bullish) OR (Daily AND 4H bullish)
     //   SHORT allowed: (Weekly AND Daily bearish) OR (Daily AND 4H bearish)
+    // ── Step 5 prep: 50 EMA per timeframe ────────────────────────────────────
+    const weeklyEma = ema50(weeklyBars);
+    const h4Ema     = h4Bars.length ? ema50(h4Bars) : [];
+
     let wp = 0, hp = 0;
-    const htf = bars.map((b, i) => {
+    const htf: { time: number; close: number; weekly: Trend; daily: Trend; h4: Trend; allowed: "long" | "short" | "none" }[] = [];
+    const scoreHistory: { time: number; close: number; w: number; d: number; h: number; total: number; pass: boolean; dir: "long" | "short" }[] = [];
+
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i];
       while (wp + 1 < weeklyRegime.length && weeklyRegime[wp + 1].time <= b.time) wp++;
       const weekly = weeklyRegime.length ? weeklyRegime[wp].trend : "neutral";
       let h4: Trend = "neutral";
+      const dayEnd = b.time + 86_399_999;
       if (h4Regime && h4Regime.length) {
-        const dayEnd = b.time + 86_399_999;
         while (hp + 1 < h4Regime.length && h4Regime[hp + 1].time <= dayEnd) hp++;
         h4 = h4Regime[hp].time <= dayEnd ? h4Regime[hp].trend : "neutral";
       }
@@ -330,9 +480,34 @@ export async function POST(req: NextRequest) {
         (weekly === "bullish" && daily === "bullish") || (daily === "bullish" && h4 === "bullish") ? "long"
         : (weekly === "bearish" && daily === "bearish") || (daily === "bearish" && h4 === "bearish") ? "short"
         : "none";
-      return { time: b.time, close: b.close, weekly, daily, h4, allowed };
-    });
+      htf.push({ time: b.time, close: b.close, weekly, daily, h4, allowed });
+
+      // Step 5: score all three timeframes for this day. Direction comes from
+      // the step 3 EMA filter (close vs daily 50 EMA).
+      const dir: "long" | "short" = b.close > emaArr[i] ? "long" : "short";
+      const dScore = scoreTimeframeLB(bars, i, dir, emaArr, swings, daily, 0.02, 5).total;
+      const wScore = scoreTimeframeLB(weeklyBars, wp, dir, weeklyEma, weeklySwings, weekly, 0.03, 3).total;
+      const hScore = h4Bars.length && h4Regime
+        ? scoreTimeframeLB(h4Bars, hp, dir, h4Ema, h4Swings, h4, 0.01, 18).total
+        : 0;
+      const scores  = [wScore, dScore, hScore];
+      const total   = wScore + dScore + hScore;
+      const passing = scores.filter(s => s >= 45).length;
+      scoreHistory.push({ time: b.time, close: b.close, w: wScore, d: dScore, h: hScore, total, pass: passing >= 2 && total >= 120, dir });
+    }
     const htfNow = htf[htf.length - 1];
+
+    // Step 5: full breakdown at the CURRENT bar for the panel
+    const lastI   = bars.length - 1;
+    const dirNow: "long" | "short" = lastBar.close > emaArr[lastI] ? "long" : "short";
+    const scoreNow = {
+      direction: dirNow,
+      weekly: scoreTimeframeLB(weeklyBars, weeklyBars.length - 1, dirNow, weeklyEma, weeklySwings, weeklyRegime[weeklyRegime.length - 1]?.trend ?? "neutral", 0.03, 3),
+      daily:  scoreTimeframeLB(bars, lastI, dirNow, emaArr, swings, finalTrend, 0.02, 5),
+      h4:     h4Bars.length && h4Regime
+        ? scoreTimeframeLB(h4Bars, h4Bars.length - 1, dirNow, h4Ema, h4Swings, h4Regime[h4Regime.length - 1]?.trend ?? "neutral", 0.01, 18)
+        : null,
+    };
 
     return NextResponse.json({
       symbol,
@@ -365,6 +540,9 @@ export async function POST(req: NextRequest) {
         allowed: htfNow?.allowed ?? "none",
         h4_available: h4Regime !== null,
       },
+      // Step 5: timeframe scoring
+      score_now: scoreNow,                // full 7-criteria breakdown per TF at the current bar
+      score_history: scoreHistory,        // per daily bar: w/d/h totals + pass (2×45 & 120 total)
     });
   } catch (e) {
     console.error(e);
