@@ -14,3 +14,4 @@ node_modules/
 # Bot — never commit secrets
 bot/.env
 .env
+.vercel
