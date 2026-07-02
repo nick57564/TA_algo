@@ -115,6 +115,7 @@ const CANDLE_API: Record<string, string> = {
 
 interface SwingData {
   type: "high" | "low";
+  label: "HH" | "LH" | "HL" | "LL";
   price: number;
   time: number;
 }
@@ -193,7 +194,7 @@ export default function BacktestLoopPage() {
     ? swings.map(s => ({
         time:      s.time,
         direction: s.type === "low" ? "long" : "short",
-        type:      s.type === "high" ? "Swing High" : "Swing Low",
+        type:      s.label, // "HH" | "LH" | "HL" | "LL"
         price:     s.price,
       }))
     : result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
@@ -282,15 +283,18 @@ export default function BacktestLoopPage() {
         {activeStep === 1 && (
           <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 260 }}>
-              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 1 — Swing High / Low Detection</p>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 1 — Market Structure Swings (HH · HL · LH · LL)</p>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <span style={{ color: "#f97316", fontWeight: 800, flexShrink: 0 }}>● SH</span>
-                  <span>One or more <strong style={{ color: "#10b981" }}>green</strong> candles → next candle is <strong style={{ color: "#ef4444" }}>red</strong> → highest point before the red = Swing High</span>
+                  <span style={{ color: "#10b981", fontWeight: 800, flexShrink: 0 }}>● HH / HL</span>
+                  <span>Higher High / Higher Low — price making bullish structure (uptrend)</span>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <span style={{ color: "#3b82f6", fontWeight: 800, flexShrink: 0 }}>● SL</span>
-                  <span>One or more <strong style={{ color: "#ef4444" }}>red</strong> candles → next candle is <strong style={{ color: "#10b981" }}>green</strong> → lowest point before the green = Swing Low</span>
+                  <span style={{ color: "#f97316", fontWeight: 800, flexShrink: 0 }}>● LH</span>
+                  <span style={{ display: "inline" }}>Lower High · <span style={{ color: "#ef4444", fontWeight: 800 }}>● LL</span> Lower Low — bearish structure (downtrend)</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                  Swings come from candle colour flips (green→red = high, red→green = low). Only <strong>major</strong> swings are kept: the leg between two swings must move ≥ 5%, so small wiggles are absorbed — exactly like drawing structure by hand.
                 </div>
               </div>
             </div>
@@ -306,12 +310,12 @@ export default function BacktestLoopPage() {
                   <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
                     <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Swing Highs</p>
                     <p style={{ fontSize: 28, fontWeight: 800, color: "#f97316" }}>{swingStats.highs}</p>
-                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>orange dots above</p>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>HH / LH above bars</p>
                   </div>
                   <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
                     <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Swing Lows</p>
                     <p style={{ fontSize: 28, fontWeight: 800, color: "#3b82f6" }}>{swingStats.lows}</p>
-                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>blue dots below</p>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>HL / LL below bars</p>
                   </div>
                   <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
                     <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Total</p>
@@ -342,11 +346,11 @@ export default function BacktestLoopPage() {
             </div>
             <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
               <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Swing Highs</p>
-              <p style={{ fontSize: 16, fontWeight: 800, color: "#f97316" }}>{swingStats?.highs ?? "—"} <span style={{ fontSize: 13 }}>orange ●</span></p>
+              <p style={{ fontSize: 16, fontWeight: 800, color: "#f97316" }}>{swingStats?.highs ?? "—"} <span style={{ fontSize: 13 }}>HH / LH</span></p>
             </div>
             <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
               <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Swing Lows</p>
-              <p style={{ fontSize: 16, fontWeight: 800, color: "#3b82f6" }}>{swingStats?.lows ?? "—"} <span style={{ fontSize: 13 }}>blue ●</span></p>
+              <p style={{ fontSize: 16, fontWeight: 800, color: "#3b82f6" }}>{swingStats?.lows ?? "—"} <span style={{ fontSize: 13 }}>HL / LL</span></p>
             </div>
           </>
         ) : (
@@ -372,7 +376,7 @@ export default function BacktestLoopPage() {
         <div style={{ marginLeft: "auto", padding: "14px 18px", display: "flex", gap: 14, alignItems: "center" }}>
           {activeStep === 1 ? (
             <>
-              {[{ c: "#f97316", l: "Swing High (SH)" }, { c: "#3b82f6", l: "Swing Low (SL)" }].map(x => (
+              {[{ c: "#10b981", l: "HH / HL (bullish)" }, { c: "#f97316", l: "LH" }, { c: "#ef4444", l: "LL (bearish)" }].map(x => (
                 <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: x.c }} />
                   <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>

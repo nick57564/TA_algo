@@ -133,28 +133,28 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
     const allMarkers: SeriesMarker<Time>[] = signals
       .map(s => {
         const isLong  = s.direction === "long";
-        const isSH    = s.type === "Swing High";
-        const isSL_sw = s.type === "Swing Low";
+        const isSwingHigh = s.type === "HH" || s.type === "LH";
+        const isSwingLow  = s.type === "HL" || s.type === "LL";
         const isEntry = s.type.toLowerCase().includes("entry");
         const isTP    = s.type.toLowerCase().includes("tp");
 
-        // Swing High: orange circle above bar (no text — just the dot)
-        if (isSH) return {
+        // Swing High (HH = higher high green-ish, LH = lower high orange): label above bar
+        if (isSwingHigh) return {
           time:     Math.floor(s.time / 1000) as Time,
           position: "aboveBar",
-          color:    "#f97316",
+          color:    s.type === "HH" ? "#10b981" : "#f97316",
           shape:    "circle",
-          text:     "SH",
+          text:     s.type,
           size:     1,
         } as SeriesMarker<Time>;
 
-        // Swing Low: blue circle below bar
-        if (isSL_sw) return {
+        // Swing Low (HL = higher low green-ish, LL = lower low red): label below bar
+        if (isSwingLow) return {
           time:     Math.floor(s.time / 1000) as Time,
           position: "belowBar",
-          color:    "#3b82f6",
+          color:    s.type === "HL" ? "#10b981" : "#ef4444",
           shape:    "circle",
-          text:     "SL",
+          text:     s.type,
           size:     1,
         } as SeriesMarker<Time>;
 

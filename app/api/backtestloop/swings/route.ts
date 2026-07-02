@@ -83,18 +83,69 @@ function detectSwings(bars: Bar[]) {
   }
 
   // Deduplicate: consecutive same-type swings → keep the most extreme
-  const out: typeof raw = [];
+  const dedup: typeof raw = [];
   for (const s of raw) {
-    const last = out[out.length - 1];
+    const last = dedup[dedup.length - 1];
     if (last && last.type === s.type) {
-      if (s.type === "high" && s.price > last.price) out[out.length - 1] = s;
-      else if (s.type === "low" && s.price < last.price) out[out.length - 1] = s;
+      if (s.type === "high" && s.price > last.price) dedup[dedup.length - 1] = s;
+      else if (s.type === "low" && s.price < last.price) dedup[dedup.length - 1] = s;
     } else {
-      out.push(s);
+      dedup.push(s);
     }
   }
 
-  return out;
+  // ── Significance filter (zigzag) ──────────────────────────────────────────
+  // Only keep MAJOR swings like a human draws them: the move between two
+  // opposite swings must be at least MIN_MOVE %. Small wiggles are absorbed
+  // into the bigger swing (keep the most extreme point of the leg).
+  const MIN_MOVE = 0.05; // 5% minimum leg
+  const major: typeof raw = [];
+  for (const s of dedup) {
+    if (major.length === 0) { major.push(s); continue; }
+    const last = major[major.length - 1];
+
+    if (last.type === s.type) {
+      // same type: keep the more extreme one
+      if (s.type === "high" && s.price > last.price) major[major.length - 1] = s;
+      else if (s.type === "low" && s.price < last.price) major[major.length - 1] = s;
+      continue;
+    }
+
+    const movePct = Math.abs(s.price - last.price) / last.price;
+    if (movePct >= MIN_MOVE) {
+      major.push(s); // significant leg → new swing confirmed
+    } else {
+      // insignificant wiggle: check if it extends the PREVIOUS same-type swing
+      const prevSame = major[major.length - 2];
+      if (prevSame && prevSame.type === s.type) {
+        if (s.type === "high" && s.price > prevSame.price) {
+          // this high is higher than the last kept high → replace it and drop the low between
+          major.splice(major.length - 2, 2, s);
+        } else if (s.type === "low" && s.price < prevSame.price) {
+          major.splice(major.length - 2, 2, s);
+        }
+        // otherwise: ignore the wiggle entirely
+      }
+    }
+  }
+
+  // ── Label each swing: HH / LH (highs) and HL / LL (lows) ──────────────────
+  // Compare to the PREVIOUS swing of the same type.
+  let prevHigh: number | null = null;
+  let prevLow:  number | null = null;
+  const labeled = major.map(s => {
+    let label: "HH" | "LH" | "HL" | "LL";
+    if (s.type === "high") {
+      label = prevHigh === null || s.price > prevHigh ? "HH" : "LH";
+      prevHigh = s.price;
+    } else {
+      label = prevLow === null || s.price > prevLow ? "HL" : "LL";
+      prevLow = s.price;
+    }
+    return { ...s, label };
+  });
+
+  return labeled;
 }
 
 export async function POST(req: NextRequest) {
@@ -110,6 +161,7 @@ export async function POST(req: NextRequest) {
       swing_lows:  swings.filter(s => s.type === "low").length,
       swings: swings.map(s => ({
         type:  s.type,          // "high" | "low"
+        label: s.label,         // "HH" | "LH" | "HL" | "LL"
         price: s.price,
         time:  s.time,          // unix ms — same format as candle times
       })),
