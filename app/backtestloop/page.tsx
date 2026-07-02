@@ -18,7 +18,8 @@ const STEPS = [
   { id: 3, label: "Daily EMA Filter", desc: "Close above 50 EMA = only longs · below = only shorts · never an entry signal" },
   { id: 4, label: "HTF Confirmation", desc: "Long: Weekly+Daily OR Daily+4H bullish · Short: same but bearish · else no trade" },
   { id: 5, label: "TF Scoring", desc: "Weekly / Daily / 4H each scored 0-60 on 7 criteria" },
-  // Step 6 and beyond will be added in future iterations
+  { id: 6, label: "Trade Requirements", desc: "HTF direction agrees · 2 of 3 TFs ≥ 45 · combined score ≥ 120" },
+  // Step 7 and beyond will be added in future iterations
 ];
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -179,6 +180,13 @@ interface ScorePoint {
   dir: "long" | "short";
 }
 
+interface RequirementsPoint {
+  time: number; close: number;
+  dir: "long" | "short";
+  htfPass: boolean; timeframePasses: number;
+  total: number; scorePass: boolean; eligible: boolean;
+}
+
 export default function BacktestLoopPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
   const [candles,  setCandles]  = useState<Candle[]>([]);
@@ -205,6 +213,8 @@ export default function BacktestLoopPage() {
   const [htfNow,       setHtfNow]       = useState<HtfNow | null>(null);
   const [scoreNow,     setScoreNow]     = useState<ScoreNow | null>(null);
   const [scoreHist,    setScoreHist]    = useState<ScorePoint[]>([]);
+  const [requirementsNow, setRequirementsNow] = useState<RequirementsPoint | null>(null);
+  const [requirementsHist, setRequirementsHist] = useState<RequirementsPoint[]>([]);
 
   const loadCandles = useCallback(async (sym: string, lim: number) => {
     setLoading(true);
@@ -240,6 +250,8 @@ export default function BacktestLoopPage() {
         setHtfNow(d.htf_now ?? null);
         setScoreNow(d.score_now ?? null);
         setScoreHist(d.score_history ?? []);
+        setRequirementsNow(d.requirements_now ?? null);
+        setRequirementsHist(d.requirements_history ?? []);
       }
     } catch {}
     setSwingLoading(false);
@@ -283,7 +295,7 @@ export default function BacktestLoopPage() {
   const markers: SignalMarker[] =
     activeStep === 1 ? swingMarkers
     : activeStep === 2 ? [...swingMarkers, ...breakMarkers]
-    : activeStep === 3 || activeStep === 4 || activeStep === 5 ? []
+    : activeStep === 3 || activeStep === 4 || activeStep === 5 || activeStep === 6 ? []
     : result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
         time: new Date(s.timestamp).getTime(), direction: s.direction, type: s.type, price: s.price,
       })) ?? [];
@@ -298,6 +310,7 @@ export default function BacktestLoopPage() {
     : activeStep === 4 ? htf.map(p => ({ time: p.time, value: p.close, trend: (p.allowed === "long" ? "bullish" : p.allowed === "short" ? "bearish" : "neutral") as "bullish" | "bearish" | "neutral" }))
     // Step 5: line coloured by score pass — green/red when 2 of 3 TFs >= 45 AND total >= 120 (direction from EMA), grey otherwise
     : activeStep === 5 ? scoreHist.map(p => ({ time: p.time, value: p.close, trend: (p.pass ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
+    : activeStep === 6 ? requirementsHist.map(p => ({ time: p.time, value: p.close, trend: (p.eligible ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
     : undefined;
 
   const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
@@ -664,6 +677,47 @@ export default function BacktestLoopPage() {
             )}
           </div>
         )}
+
+        {/* Step 6 info panel */}
+        {activeStep === 6 && (
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 6 — Trade Requirements</p>
+              <p style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                A bar becomes eligible only when the daily EMA direction agrees with step 4, at least two timeframe scores reach 45, and the combined score reaches 120. Step 6 qualifies a setup; it does not enter a trade.
+              </p>
+              {requirementsHist.length > 0 && (
+                <p style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+                  Eligible setups in this period: <strong style={{ color: "#f1f5f9" }}>{requirementsHist.filter(p => p.eligible).length}</strong> of {requirementsHist.length} days
+                </p>
+              )}
+            </div>
+
+            {swingLoading ? (
+              <div style={{ color: "#64748b", fontSize: 14 }}>Checking requirements…</div>
+            ) : requirementsNow && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(150px, 1fr))", gap: 8 }}>
+                {[
+                  { label: "HTF agrees", pass: requirementsNow.htfPass, value: requirementsNow.htfPass ? requirementsNow.dir.toUpperCase() : "NO" },
+                  { label: "TFs ≥ 45", pass: requirementsNow.timeframePasses >= 2, value: `${requirementsNow.timeframePasses} / 3` },
+                  { label: "Combined ≥ 120", pass: requirementsNow.total >= 120, value: `${requirementsNow.total} / 180` },
+                ].map(item => (
+                  <div key={item.label} style={{ padding: "12px 14px", borderRadius: 9, background: item.pass ? "rgba(16,185,129,.1)" : "rgba(239,68,68,.08)", border: `1px solid ${item.pass ? "rgba(16,185,129,.35)" : "rgba(239,68,68,.3)"}` }}>
+                    <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em" }}>{item.label}</p>
+                    <p style={{ color: item.pass ? "#10b981" : "#ef4444", fontSize: 16, fontWeight: 800, marginTop: 4 }}>{item.pass ? "✓ " : "✕ "}{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ minWidth: 150, textAlign: "center", padding: "14px 18px", borderRadius: 10, background: requirementsNow?.eligible ? "rgba(16,185,129,.12)" : "rgba(100,116,139,.12)", border: `1px solid ${requirementsNow?.eligible ? "rgba(16,185,129,.4)" : "#334155"}` }}>
+              <p style={{ color: "#64748b", fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em" }}>Verdict</p>
+              <p style={{ color: requirementsNow?.eligible ? "#10b981" : "#94a3b8", fontSize: 17, fontWeight: 900, marginTop: 5 }}>
+                {requirementsNow?.eligible ? `${requirementsNow.dir.toUpperCase()} SETUP` : "WAIT"}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Chart info bar ── */}
@@ -782,6 +836,23 @@ export default function BacktestLoopPage() {
               </p>
             </div>
           </>
+        ) : activeStep === 6 ? (
+          <>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#06b6d4" }}>Step 6: Requirements</p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Qualified Days</p>
+              <p className="num" style={{ fontSize: 16, fontWeight: 800 }}>{requirementsHist.filter(p => p.eligible).length} / {requirementsHist.length}</p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Verdict Now</p>
+              <p style={{ fontSize: 16, fontWeight: 800, color: requirementsNow?.eligible ? (requirementsNow.dir === "long" ? "var(--teal)" : "var(--red)") : "var(--muted)" }}>
+                {requirementsNow?.eligible ? `${requirementsNow.dir.toUpperCase()} SETUP` : "WAIT"}
+              </p>
+            </div>
+          </>
         ) : (
           // Normal backtest stats
           <>
@@ -842,6 +913,15 @@ export default function BacktestLoopPage() {
           ) : activeStep === 5 ? (
             <>
               {[{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }].map(x => (
+                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
+                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
+                </div>
+              ))}
+            </>
+          ) : activeStep === 6 ? (
+            <>
+              {[{ c: "#10b981", l: "Eligible long setup" }, { c: "#ef4444", l: "Eligible short setup" }, { c: "#64748b", l: "Requirements not met" }].map(x => (
                 <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
                   <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>

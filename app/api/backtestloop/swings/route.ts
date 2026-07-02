@@ -464,6 +464,7 @@ export async function POST(req: NextRequest) {
     let wp = 0, hp = 0;
     const htf: { time: number; close: number; weekly: Trend; daily: Trend; h4: Trend; allowed: "long" | "short" | "none" }[] = [];
     const scoreHistory: { time: number; close: number; w: number; d: number; h: number; total: number; pass: boolean; dir: "long" | "short" }[] = [];
+    const requirementsHistory: { time: number; close: number; dir: "long" | "short"; htfPass: boolean; timeframePasses: number; total: number; scorePass: boolean; eligible: boolean }[] = [];
 
     for (let i = 0; i < bars.length; i++) {
       const b = bars[i];
@@ -493,7 +494,19 @@ export async function POST(req: NextRequest) {
       const scores  = [wScore, dScore, hScore];
       const total   = wScore + dScore + hScore;
       const passing = scores.filter(s => s >= 45).length;
-      scoreHistory.push({ time: b.time, close: b.close, w: wScore, d: dScore, h: hScore, total, pass: passing >= 2 && total >= 120, dir });
+      const scorePass = passing >= 2 && total >= 120;
+      const htfPass = allowed === dir;
+      scoreHistory.push({ time: b.time, close: b.close, w: wScore, d: dScore, h: hScore, total, pass: scorePass, dir });
+      requirementsHistory.push({
+        time: b.time,
+        close: b.close,
+        dir,
+        htfPass,
+        timeframePasses: passing,
+        total,
+        scorePass,
+        eligible: htfPass && scorePass,
+      });
     }
     const htfNow = htf[htf.length - 1];
 
@@ -508,6 +521,7 @@ export async function POST(req: NextRequest) {
         ? scoreTimeframeLB(h4Bars, h4Bars.length - 1, dirNow, h4Ema, h4Swings, h4Regime[h4Regime.length - 1]?.trend ?? "neutral", 0.01, 18)
         : null,
     };
+    const requirementsNow = requirementsHistory[requirementsHistory.length - 1] ?? null;
 
     return NextResponse.json({
       symbol,
@@ -543,6 +557,10 @@ export async function POST(req: NextRequest) {
       // Step 5: timeframe scoring
       score_now: scoreNow,                // full 7-criteria breakdown per TF at the current bar
       score_history: scoreHistory,        // per daily bar: w/d/h totals + pass (2×45 & 120 total)
+      // Step 6: all pre-entry requirements combined. Step 7 will look for an
+      // entry trigger only on bars where eligible is true.
+      requirements_now: requirementsNow,
+      requirements_history: requirementsHistory,
     });
   } catch (e) {
     console.error(e);
