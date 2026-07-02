@@ -13,8 +13,9 @@ const fmt = (n: number, d = 2) => n?.toFixed(d) ?? "—";
 
 // Step definitions — added one by one
 const STEPS = [
-  { id: 1, label: "Swing Detection", desc: "Identify Swing Highs (orange) & Swing Lows (blue) from candle colour changes" },
-  // Step 2 and beyond will be added in future iterations
+  { id: 1, label: "Swing Detection", desc: "Identify Swing Highs & Swing Lows and label them HH/HL/LH/LL" },
+  { id: 2, label: "Market Structure", desc: "Close above LH = bullish · close below HL = bearish · only closes count" },
+  // Step 3 and beyond will be added in future iterations
 ];
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -120,6 +121,19 @@ interface SwingData {
   time: number;
 }
 
+interface StructureEvent {
+  time: number;
+  price: number;
+  brokeLevel: number;
+  newTrend: "bullish" | "bearish";
+}
+
+interface RegimePoint {
+  time: number;
+  close: number;
+  trend: "bullish" | "bearish" | "neutral";
+}
+
 export default function BacktestLoopPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
   const [candles,  setCandles]  = useState<Candle[]>([]);
@@ -132,11 +146,14 @@ export default function BacktestLoopPage() {
   const [selectedTradeIdx, setSelectedTradeIdx] = useState<number | null>(null);
   const [highlightTrade,   setHighlightTrade]   = useState<HighlightTrade | null>(null);
 
-  // Step 1: swing detection state
+  // Step 1 + 2: swing detection & market structure state
   const [activeStep,   setActiveStep]   = useState<number | null>(1);
   const [swings,       setSwings]       = useState<SwingData[]>([]);
   const [swingLoading, setSwingLoading] = useState(false);
   const [swingStats,   setSwingStats]   = useState<{ highs: number; lows: number } | null>(null);
+  const [structEvents, setStructEvents] = useState<StructureEvent[]>([]);
+  const [regime,       setRegime]       = useState<RegimePoint[]>([]);
+  const [currentTrend, setCurrentTrend] = useState<"bullish" | "bearish" | "neutral">("neutral");
 
   const loadCandles = useCallback(async (sym: string, lim: number) => {
     setLoading(true);
@@ -163,6 +180,9 @@ export default function BacktestLoopPage() {
       if (d.swings) {
         setSwings(d.swings);
         setSwingStats({ highs: d.swing_highs, lows: d.swing_lows });
+        setStructEvents(d.structure_events ?? []);
+        setRegime(d.regime ?? []);
+        setCurrentTrend(d.current_trend ?? "neutral");
       }
     } catch {}
     setSwingLoading(false);
@@ -189,17 +209,31 @@ export default function BacktestLoopPage() {
     setRunning(false);
   }
 
-  // Build chart markers: either swing SH/SL dots OR trade signals
-  const markers: SignalMarker[] = activeStep === 1
-    ? swings.map(s => ({
-        time:      s.time,
-        direction: s.type === "low" ? "long" : "short",
-        type:      s.label, // "HH" | "LH" | "HL" | "LL"
-        price:     s.price,
-      }))
+  // Build chart markers depending on the active step
+  const swingMarkers: SignalMarker[] = swings.map(s => ({
+    time:      s.time,
+    direction: s.type === "low" ? "long" : "short",
+    type:      s.label, // "HH" | "LH" | "HL" | "LL"
+    price:     s.price,
+  }));
+  const breakMarkers: SignalMarker[] = structEvents.map(e => ({
+    time:      e.time,
+    direction: e.newTrend === "bullish" ? "long" : "short",
+    type:      e.newTrend === "bullish" ? "Bullish Break" : "Bearish Break",
+    price:     e.price,
+  }));
+
+  const markers: SignalMarker[] =
+    activeStep === 1 ? swingMarkers
+    : activeStep === 2 ? [...swingMarkers, ...breakMarkers]
     : result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
         time: new Date(s.timestamp).getTime(), direction: s.direction, type: s.type, price: s.price,
       })) ?? [];
+
+  // Step 2: coloured regime line along the closes
+  const regimeLine = activeStep === 2
+    ? regime.map(p => ({ time: p.time, value: p.close, trend: p.trend }))
+    : undefined;
 
   const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
   const shorts = result?.trades?.filter((t: { direction: string }) => t.direction === "short").length ?? 0;
@@ -327,6 +361,62 @@ export default function BacktestLoopPage() {
             </div>
           </div>
         )}
+
+        {/* Step 2 info panel */}
+        {activeStep === 2 && (
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 2 — Market Structure (close-based state machine)</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#10b981", fontWeight: 800, flexShrink: 0 }}>▲ Bullish</span>
+                  <span>Candle <strong>closes above</strong> the previous Lower High (LH). Stays bullish until a close below the active Higher Low.</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#ef4444", fontWeight: 800, flexShrink: 0 }}>▼ Bearish</span>
+                  <span>Candle <strong>closes below</strong> the active Higher Low (HL). Stays bearish until a close above the active Lower High.</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                  Pullbacks, lower highs, wicks and candle colour are ignored — <strong>only candle closes matter</strong>. The coloured line on the chart shows the active structure per candle; arrows mark every break.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {swingLoading ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#64748b", fontSize: 14 }}>
+                  <span style={{ width: 14, height: 14, border: "2px solid #334155", borderTopColor: "#10b981", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+                  Analysing…
+                </div>
+              ) : (
+                <>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Current Structure</p>
+                    <p style={{ fontSize: 22, fontWeight: 800, color: currentTrend === "bullish" ? "#10b981" : currentTrend === "bearish" ? "#ef4444" : "#64748b" }}>
+                      {currentTrend === "bullish" ? "▲ BULLISH" : currentTrend === "bearish" ? "▼ BEARISH" : "— NEUTRAL"}
+                    </p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Bullish Breaks</p>
+                    <p style={{ fontSize: 28, fontWeight: 800, color: "#10b981" }}>{structEvents.filter(e => e.newTrend === "bullish").length}</p>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>close &gt; LH</p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Bearish Breaks</p>
+                    <p style={{ fontSize: 28, fontWeight: 800, color: "#ef4444" }}>{structEvents.filter(e => e.newTrend === "bearish").length}</p>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>close &lt; HL</p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Last Break</p>
+                    <p style={{ fontSize: 16, fontWeight: 800, color: "#f1f5f9", marginTop: 6 }}>
+                      {structEvents.length ? new Date(structEvents[structEvents.length - 1].time).toLocaleDateString() : "—"}
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Chart info bar ── */}
@@ -351,6 +441,27 @@ export default function BacktestLoopPage() {
             <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
               <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Swing Lows</p>
               <p style={{ fontSize: 16, fontWeight: 800, color: "#3b82f6" }}>{swingStats?.lows ?? "—"} <span style={{ fontSize: 13 }}>HL / LL</span></p>
+            </div>
+          </>
+        ) : activeStep === 2 ? (
+          <>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#10b981" }}>Step 2: Market Structure</p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Structure Now</p>
+              <p style={{ fontSize: 16, fontWeight: 800, color: currentTrend === "bullish" ? "var(--teal)" : currentTrend === "bearish" ? "var(--red)" : "var(--muted)" }}>
+                {currentTrend.toUpperCase()}
+              </p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Breaks</p>
+              <p style={{ fontSize: 16, fontWeight: 800 }}>
+                <span style={{ color: "var(--teal)" }}>{structEvents.filter(e => e.newTrend === "bullish").length}↑</span>
+                {" · "}
+                <span style={{ color: "var(--red)" }}>{structEvents.filter(e => e.newTrend === "bearish").length}↓</span>
+              </p>
             </div>
           </>
         ) : (
@@ -383,6 +494,15 @@ export default function BacktestLoopPage() {
                 </div>
               ))}
             </>
+          ) : activeStep === 2 ? (
+            <>
+              {[{ c: "#10b981", l: "Bullish structure" }, { c: "#ef4444", l: "Bearish structure" }, { c: "#64748b", l: "Neutral" }].map(x => (
+                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
+                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
+                </div>
+              ))}
+            </>
           ) : (
             <>
               {[{ c: "var(--teal)", l: "Long" }, { c: "var(--red)", l: "Short" }, { c: "var(--blue)", l: "TP" }, { c: "var(--yellow)", l: "SL" }].map(x => (
@@ -404,7 +524,7 @@ export default function BacktestLoopPage() {
           </div>
         )}
         {candles.length > 0 ? (
-          <CandleChart candles={candles} signals={markers} height={480}
+          <CandleChart candles={candles} signals={markers} regimeLine={regimeLine} height={480}
             highlightTrade={highlightTrade} tradeRanges={tradeRanges} onTradeClick={selectTrade} />
         ) : (
           <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10 }}>

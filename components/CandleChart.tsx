@@ -32,6 +32,7 @@ export interface SignalMarker {
 }
 
 export interface MAPoint { time: number; value: number; }
+export interface RegimePoint { time: number; value: number; trend: "bullish" | "bearish" | "neutral"; }
 export interface HighlightTrade { entryTime: number; exitTime: number; direction: "long" | "short"; }
 export interface TradeRange { entryTime: number; exitTime: number; }
 
@@ -40,13 +41,14 @@ interface Props {
   signals?: SignalMarker[];
   maLine?: MAPoint[];
   maLabel?: string;
+  regimeLine?: RegimePoint[];
   height?: number;
   highlightTrade?: HighlightTrade | null;
   tradeRanges?: TradeRange[];
   onTradeClick?: (idx: number) => void;
 }
 
-export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
+export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", regimeLine, height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -114,6 +116,37 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
 
     series.setData(data);
 
+    // Regime line: coloured segments along the close — green while bullish,
+    // red while bearish, grey while neutral. One LineSeries per contiguous
+    // trend segment so each can have its own colour.
+    if (regimeLine && regimeLine.length > 0) {
+      const segs: { trend: string; pts: LineData[] }[] = [];
+      for (let i = 0; i < regimeLine.length; i++) {
+        const p = regimeLine[i];
+        const pt: LineData = { time: Math.floor(p.time / 1000) as Time, value: p.value };
+        const cur = segs[segs.length - 1];
+        if (!cur || cur.trend !== p.trend) {
+          // overlap 1 point so segments connect visually
+          const pts: LineData[] = cur ? [cur.pts[cur.pts.length - 1], pt] : [pt];
+          segs.push({ trend: p.trend, pts });
+        } else {
+          cur.pts.push(pt);
+        }
+      }
+      const trendColor: Record<string, string> = { bullish: "#10b981", bearish: "#ef4444", neutral: "#64748b" };
+      for (const seg of segs) {
+        if (seg.pts.length < 2) continue;
+        const s = chart.addSeries(LineSeries, {
+          color: trendColor[seg.trend] ?? "#64748b",
+          lineWidth: 3,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(seg.pts);
+      }
+    }
+
     // 200-day MA line
     if (maLine && maLine.length > 0) {
       const maSeries = chart.addSeries(LineSeries, {
@@ -135,6 +168,24 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
         const isLong  = s.direction === "long";
         const isSwingHigh = s.type === "HH" || s.type === "LH";
         const isSwingLow  = s.type === "HL" || s.type === "LL";
+
+        // Structure break events (Step 2): close broke through LH/HL level
+        if (s.type === "Bullish Break") return {
+          time:     Math.floor(s.time / 1000) as Time,
+          position: "belowBar",
+          color:    "#10b981",
+          shape:    "arrowUp",
+          text:     "BULLISH ↑",
+          size:     2,
+        } as SeriesMarker<Time>;
+        if (s.type === "Bearish Break") return {
+          time:     Math.floor(s.time / 1000) as Time,
+          position: "aboveBar",
+          color:    "#ef4444",
+          shape:    "arrowDown",
+          text:     "BEARISH ↓",
+          size:     2,
+        } as SeriesMarker<Time>;
         const isEntry = s.type.toLowerCase().includes("entry");
         const isTP    = s.type.toLowerCase().includes("tp");
 
@@ -239,7 +290,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       chart.unsubscribeClick(onChartClick);
       chart.remove();
     };
-  }, [candles, signals, height]);
+  }, [candles, signals, regimeLine, height]);
 
   // Zoom to highlighted trade + reposition the glow overlay without re-building the chart
   useEffect(() => {

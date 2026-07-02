@@ -148,11 +148,70 @@ function detectSwings(bars: Bar[]) {
   return labeled;
 }
 
+// ─── Step 2: Market Structure State Machine ──────────────────────────────────
+// Bullish : a candle CLOSES above the previous Lower High (LH).
+//           Stays bullish until a candle CLOSES below the active Higher Low (HL).
+// Bearish : a candle CLOSES below the previous Higher Low (HL).
+//           Stays bearish until a candle CLOSES above the active Lower High (LH).
+// Pullbacks, lower highs, wicks and candle colour are ignored — only closes matter.
+
+type Trend = "bullish" | "bearish" | "neutral";
+
+interface StructureEvent {
+  time: number;
+  price: number;                        // close that broke the level
+  brokeLevel: number;                   // the LH/HL price that was broken
+  newTrend: "bullish" | "bearish";
+}
+
+function computeStructure(
+  bars: Bar[],
+  swings: ReturnType<typeof detectSwings>,
+) {
+  let trend: Trend = "neutral";
+  let activeHigh: { price: number; label: string } | null = null; // last confirmed swing high (LH in downtrend)
+  let activeLow:  { price: number; label: string } | null = null; // last confirmed swing low  (HL in uptrend)
+
+  const regime: { time: number; close: number; trend: Trend }[] = [];
+  const events: StructureEvent[] = [];
+
+  // A swing at barIdx j is only KNOWN one bar later (the colour-flip bar j+1).
+  let sw = 0;
+
+  for (let i = 0; i < bars.length; i++) {
+    // Confirm all swings whose flip bar has printed (barIdx + 1 <= i)
+    while (sw < swings.length && swings[sw].barIdx + 1 <= i) {
+      const s = swings[sw];
+      if (s.type === "high") activeHigh = { price: s.price, label: s.label };
+      else                   activeLow  = { price: s.price, label: s.label };
+      sw++;
+    }
+
+    const close = bars[i].close;
+
+    // Break UP: close above the active swing high (the previous LH) → bullish
+    if (trend !== "bullish" && activeHigh && close > activeHigh.price) {
+      trend = "bullish";
+      events.push({ time: bars[i].time, price: close, brokeLevel: activeHigh.price, newTrend: "bullish" });
+    }
+    // Break DOWN: close below the active swing low (the active HL) → bearish
+    else if (trend !== "bearish" && activeLow && close < activeLow.price) {
+      trend = "bearish";
+      events.push({ time: bars[i].time, price: close, brokeLevel: activeLow.price, newTrend: "bearish" });
+    }
+
+    regime.push({ time: bars[i].time, close, trend });
+  }
+
+  return { regime, events, finalTrend: trend };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { symbol = "BTC", limit = 365, interval = "1d" } = await req.json();
     const bars   = await fetchBars(symbol, interval, limit);
     const swings = detectSwings(bars);
+    const { regime, events, finalTrend } = computeStructure(bars, swings);
 
     return NextResponse.json({
       symbol,
@@ -165,6 +224,10 @@ export async function POST(req: NextRequest) {
         price: s.price,
         time:  s.time,          // unix ms — same format as candle times
       })),
+      // Step 2: market structure
+      current_trend: finalTrend,
+      structure_events: events,           // every bullish/bearish flip (close-based break)
+      regime,                             // per-bar trend for the coloured trend line
     });
   } catch (e) {
     console.error(e);
