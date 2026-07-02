@@ -16,7 +16,8 @@ const STEPS = [
   { id: 1, label: "Swing Detection", desc: "Identify Swing Highs & Swing Lows and label them HH/HL/LH/LL" },
   { id: 2, label: "Market Structure", desc: "Close above LH = bullish · close below HL = bearish · only closes count" },
   { id: 3, label: "Daily EMA Filter", desc: "Close above 50 EMA = only longs · below = only shorts · never an entry signal" },
-  // Step 4 and beyond will be added in future iterations
+  { id: 4, label: "HTF Confirmation", desc: "Long: Weekly+Daily OR Daily+4H bullish · Short: same but bearish · else no trade" },
+  // Step 5 and beyond will be added in future iterations
 ];
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -141,6 +142,23 @@ interface EmaPoint {
   direction: "long" | "short";
 }
 
+interface HtfPoint {
+  time: number;
+  close: number;
+  weekly: "bullish" | "bearish" | "neutral";
+  daily:  "bullish" | "bearish" | "neutral";
+  h4:     "bullish" | "bearish" | "neutral";
+  allowed: "long" | "short" | "none";
+}
+
+interface HtfNow {
+  weekly: "bullish" | "bearish" | "neutral";
+  daily:  "bullish" | "bearish" | "neutral";
+  h4:     "bullish" | "bearish" | "neutral";
+  allowed: "long" | "short" | "none";
+  h4_available: boolean;
+}
+
 export default function BacktestLoopPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
   const [candles,  setCandles]  = useState<Candle[]>([]);
@@ -163,6 +181,8 @@ export default function BacktestLoopPage() {
   const [currentTrend, setCurrentTrend] = useState<"bullish" | "bearish" | "neutral">("neutral");
   const [emaData,      setEmaData]      = useState<EmaPoint[]>([]);
   const [allowedDir,   setAllowedDir]   = useState<"long" | "short" | null>(null);
+  const [htf,          setHtf]          = useState<HtfPoint[]>([]);
+  const [htfNow,       setHtfNow]       = useState<HtfNow | null>(null);
 
   const loadCandles = useCallback(async (sym: string, lim: number) => {
     setLoading(true);
@@ -194,6 +214,8 @@ export default function BacktestLoopPage() {
         setCurrentTrend(d.current_trend ?? "neutral");
         setEmaData(d.ema50 ?? []);
         setAllowedDir(d.allowed_direction ?? null);
+        setHtf(d.htf ?? []);
+        setHtfNow(d.htf_now ?? null);
       }
     } catch {}
     setSwingLoading(false);
@@ -237,16 +259,19 @@ export default function BacktestLoopPage() {
   const markers: SignalMarker[] =
     activeStep === 1 ? swingMarkers
     : activeStep === 2 ? [...swingMarkers, ...breakMarkers]
-    : activeStep === 3 ? []
+    : activeStep === 3 || activeStep === 4 ? []
     : result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
         time: new Date(s.timestamp).getTime(), direction: s.direction, type: s.type, price: s.price,
       })) ?? [];
 
   // Step 2: coloured regime line along the closes
   // Step 3: the 50 EMA itself, coloured by allowed direction (green = longs only, red = shorts only)
+  // Step 4: line along the closes coloured by ALLOWED trade direction
+  //   green = long allowed · red = short allowed · grey = no trade
   const regimeLine =
     activeStep === 2 ? regime.map(p => ({ time: p.time, value: p.close, trend: p.trend }))
     : activeStep === 3 ? emaData.map(p => ({ time: p.time, value: p.value, trend: (p.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish" }))
+    : activeStep === 4 ? htf.map(p => ({ time: p.time, value: p.close, trend: (p.allowed === "long" ? "bullish" : p.allowed === "short" ? "bearish" : "neutral") as "bullish" | "bearish" | "neutral" }))
     : undefined;
 
   const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
@@ -487,6 +512,65 @@ export default function BacktestLoopPage() {
             </div>
           </div>
         )}
+
+        {/* Step 4 info panel */}
+        {activeStep === 4 && (
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 4 — Higher Timeframe Confirmation</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#10b981", fontWeight: 800, flexShrink: 0 }}>▲ Long</span>
+                  <span>Weekly <strong>AND</strong> Daily bullish — or — Daily <strong>AND</strong> 4H bullish</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#ef4444", fontWeight: 800, flexShrink: 0 }}>▼ Short</span>
+                  <span>Weekly <strong>AND</strong> Daily bearish — or — Daily <strong>AND</strong> 4H bearish</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                  If neither condition is met → <strong>no trade</strong> (grey on the chart). All three timeframes use the same structure rules from step 2 — Weekly is built from the daily candles, 4H from real 4-hour candles.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {swingLoading ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#64748b", fontSize: 14 }}>
+                  <span style={{ width: 14, height: 14, border: "2px solid #334155", borderTopColor: "#10b981", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+                  Analysing…
+                </div>
+              ) : htfNow && (
+                <>
+                  {([["Weekly", htfNow.weekly], ["Daily", htfNow.daily], ["4H", htfNow.h4]] as const).map(([tf, trend]) => (
+                    <div key={tf} style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center", minWidth: 90 }}>
+                      <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{tf}</p>
+                      <p style={{ fontSize: 17, fontWeight: 800, color: trend === "bullish" ? "#10b981" : trend === "bearish" ? "#ef4444" : "#64748b" }}>
+                        {trend === "bullish" ? "▲ BULL" : trend === "bearish" ? "▼ BEAR" : "—"}
+                      </p>
+                      {tf === "4H" && !htfNow.h4_available && <p style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>no data</p>}
+                    </div>
+                  ))}
+                  <div style={{ background: htfNow.allowed === "none" ? "#1e293b" : htfNow.allowed === "long" ? "rgba(16,185,129,.15)" : "rgba(239,68,68,.15)", border: `2px solid ${htfNow.allowed === "none" ? "#334155" : htfNow.allowed === "long" ? "#10b981" : "#ef4444"}`, borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Verdict Now</p>
+                    <p style={{ fontSize: 20, fontWeight: 800, color: htfNow.allowed === "long" ? "#10b981" : htfNow.allowed === "short" ? "#ef4444" : "#64748b" }}>
+                      {htfNow.allowed === "long" ? "▲ LONG OK" : htfNow.allowed === "short" ? "▼ SHORT OK" : "✕ NO TRADE"}
+                    </p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Tradeable Days</p>
+                    <p style={{ fontSize: 15, fontWeight: 800, marginTop: 4 }}>
+                      <span style={{ color: "#10b981" }}>{htf.filter(p => p.allowed === "long").length}↑</span>
+                      {" · "}
+                      <span style={{ color: "#ef4444" }}>{htf.filter(p => p.allowed === "short").length}↓</span>
+                      {" · "}
+                      <span style={{ color: "#64748b" }}>{htf.filter(p => p.allowed === "none").length}✕</span>
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Chart info bar ── */}
@@ -555,6 +639,29 @@ export default function BacktestLoopPage() {
               </p>
             </div>
           </>
+        ) : activeStep === 4 ? (
+          <>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#8b5cf6" }}>Step 4: HTF Confirmation</p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>W / D / 4H</p>
+              <p style={{ fontSize: 15, fontWeight: 800 }}>
+                {([htfNow?.weekly, htfNow?.daily, htfNow?.h4] as const).map((t, i) => (
+                  <span key={i} style={{ color: t === "bullish" ? "var(--teal)" : t === "bearish" ? "var(--red)" : "var(--muted)" }}>
+                    {t === "bullish" ? "▲" : t === "bearish" ? "▼" : "—"}{i < 2 ? " " : ""}
+                  </span>
+                ))}
+              </p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Verdict</p>
+              <p style={{ fontSize: 16, fontWeight: 800, color: htfNow?.allowed === "long" ? "var(--teal)" : htfNow?.allowed === "short" ? "var(--red)" : "var(--muted)" }}>
+                {htfNow?.allowed === "long" ? "LONG OK" : htfNow?.allowed === "short" ? "SHORT OK" : "NO TRADE"}
+              </p>
+            </div>
+          </>
         ) : (
           // Normal backtest stats
           <>
@@ -597,6 +704,15 @@ export default function BacktestLoopPage() {
           ) : activeStep === 3 ? (
             <>
               {[{ c: "#10b981", l: "50 EMA — longs only" }, { c: "#ef4444", l: "50 EMA — shorts only" }].map(x => (
+                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
+                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
+                </div>
+              ))}
+            </>
+          ) : activeStep === 4 ? (
+            <>
+              {[{ c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" }].map(x => (
                 <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
                   <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
