@@ -148,6 +148,20 @@ function detectSwings(bars: Bar[]) {
   return labeled;
 }
 
+// ─── Step 3: Daily 50 EMA Filter ─────────────────────────────────────────────
+// The EMA only decides the ALLOWED trade direction — it never creates a signal.
+// Daily close above the 50 EMA → only LONG trades allowed.
+// Daily close below the 50 EMA → only SHORT trades allowed.
+
+function ema50(bars: Bar[]): number[] {
+  const k = 2 / (50 + 1);
+  const out: number[] = [];
+  for (let i = 0; i < bars.length; i++) {
+    out.push(i === 0 ? bars[0].close : bars[i].close * k + out[i - 1] * (1 - k));
+  }
+  return out;
+}
+
 // ─── Step 2: Market Structure State Machine ──────────────────────────────────
 // Bullish : a candle CLOSES above the previous Lower High (LH).
 //           Stays bullish until a candle CLOSES below the active Higher Low (HL).
@@ -212,6 +226,8 @@ export async function POST(req: NextRequest) {
     const bars   = await fetchBars(symbol, interval, limit);
     const swings = detectSwings(bars);
     const { regime, events, finalTrend } = computeStructure(bars, swings);
+    const emaArr = ema50(bars);
+    const lastBar = bars[bars.length - 1];
 
     return NextResponse.json({
       symbol,
@@ -228,6 +244,13 @@ export async function POST(req: NextRequest) {
       current_trend: finalTrend,
       structure_events: events,           // every bullish/bearish flip (close-based break)
       regime,                             // per-bar trend for the coloured trend line
+      // Step 3: daily 50 EMA direction filter
+      ema50: bars.map((b, i) => ({
+        time: b.time,
+        value: emaArr[i],
+        direction: b.close > emaArr[i] ? "long" : "short", // allowed trade direction
+      })),
+      allowed_direction: lastBar.close > emaArr[emaArr.length - 1] ? "long" : "short",
     });
   } catch (e) {
     console.error(e);
