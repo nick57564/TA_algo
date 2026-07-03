@@ -464,6 +464,7 @@ export async function POST(req: NextRequest) {
     let wp = 0, hp = 0;
     const htf: { time: number; close: number; weekly: Trend; daily: Trend; h4: Trend; allowed: "long" | "short" | "none" }[] = [];
     const scoreHistory: { time: number; close: number; w: number; d: number; h: number; total: number; pass: boolean; dir: "long" | "short" }[] = [];
+    const setupHistory: { time: number; close: number; dir: "long" | "short"; c1: boolean; c2: boolean; c3: boolean; c4: boolean; valid: boolean }[] = [];
 
     for (let i = 0; i < bars.length; i++) {
       const b = bars[i];
@@ -494,6 +495,13 @@ export async function POST(req: NextRequest) {
       const total   = wScore + dScore + hScore;
       const passing = scores.filter(s => s >= 45).length;
       scoreHistory.push({ time: b.time, close: b.close, w: wScore, d: dScore, h: hScore, total, pass: passing >= 2 && total >= 120, dir });
+
+      // Step 6: trade requirements — ALL must be true (entry signal is step 7)
+      const c1 = true;                    // EMA agrees: the EMA defines dir, so always true for dir
+      const c2 = allowed === dir;         // higher timeframes aligned in the SAME direction
+      const c3 = passing >= 2;            // at least 2 of 3 TFs score >= 45
+      const c4 = total >= 120;            // combined score >= 120
+      setupHistory.push({ time: b.time, close: b.close, dir, c1, c2, c3, c4, valid: c1 && c2 && c3 && c4 });
     }
     const htfNow = htf[htf.length - 1];
 
@@ -543,6 +551,9 @@ export async function POST(req: NextRequest) {
       // Step 5: timeframe scoring
       score_now: scoreNow,                // full 7-criteria breakdown per TF at the current bar
       score_history: scoreHistory,        // per daily bar: w/d/h totals + pass (2×45 & 120 total)
+      // Step 6: trade requirements checklist
+      setup_history: setupHistory,        // per daily bar: conditions 1-4 + valid flag
+      setup_now: setupHistory[setupHistory.length - 1] ?? null,
     });
   } catch (e) {
     console.error(e);
