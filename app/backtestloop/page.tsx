@@ -217,6 +217,24 @@ export default function BacktestLoopPage() {
   const [setupNow,     setSetupNow]     = useState<SetupPoint | null>(null);
   const [emaWeekly,    setEmaWeekly]    = useState<{ time: number; value: number }[]>([]);
   const [emaH4,        setEmaH4]        = useState<{ time: number; value: number }[]>([]);
+  const [hidden,       setHidden]       = useState<Set<string>>(new Set());
+
+  const toggleLine = (label: string) => setHidden(prev => {
+    const next = new Set(prev);
+    if (next.has(label)) next.delete(label); else next.add(label);
+    return next;
+  });
+
+  // Clickable legend chips: click to hide/show the matching line or markers
+  const legendChips = (items: { c: string; l: string }[], shape: "dot" | "bar" = "bar") => items.map(x => (
+    <div key={x.l} onClick={() => toggleLine(x.l)} title="Click to hide/show"
+      style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", opacity: hidden.has(x.l) ? 0.3 : 1, transition: "opacity .12s" }}>
+      {shape === "dot"
+        ? <div style={{ width: 10, height: 10, borderRadius: "50%", background: x.c }} />
+        : <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />}
+      <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, textDecoration: hidden.has(x.l) ? "line-through" : "none" }}>{x.l}</span>
+    </div>
+  ));
 
   const loadCandles = useCallback(async (sym: string, lim: number) => {
     setLoading(true);
@@ -283,12 +301,17 @@ export default function BacktestLoopPage() {
   }
 
   // Build chart markers depending on the active step
-  const swingMarkers: SignalMarker[] = swings.map(s => ({
-    time:      s.time,
-    direction: s.type === "low" ? "long" : "short",
-    type:      s.label, // "HH" | "LH" | "HL" | "LL"
-    price:     s.price,
-  }));
+  const swingMarkers: SignalMarker[] = swings
+    .filter(s =>
+      !(hidden.has("HH / HL (bullish)") && (s.label === "HH" || s.label === "HL")) &&
+      !(hidden.has("LH") && s.label === "LH") &&
+      !(hidden.has("LL (bearish)") && s.label === "LL"))
+    .map(s => ({
+      time:      s.time,
+      direction: s.type === "low" ? "long" : "short",
+      type:      s.label, // "HH" | "LH" | "HL" | "LL"
+      price:     s.price,
+    }));
   const breakMarkers: SignalMarker[] = structEvents.map(e => ({
     time:      e.time,
     direction: e.newTrend === "bullish" ? "long" : "short",
@@ -308,7 +331,7 @@ export default function BacktestLoopPage() {
   // Step 3: the 50 EMA itself, coloured by allowed direction (green = longs only, red = shorts only)
   // Step 4: line along the closes coloured by ALLOWED trade direction
   //   green = long allowed · red = short allowed · grey = no trade
-  const regimeLine =
+  const regimeLineRaw =
     activeStep === 2 ? regime.map(p => ({ time: p.time, value: p.close, trend: p.trend }))
     : activeStep === 3 ? emaData.map(p => ({ time: p.time, value: p.value, trend: (p.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish" }))
     : activeStep === 4 ? htf.map(p => ({ time: p.time, value: p.close, trend: (p.allowed === "long" ? "bullish" : p.allowed === "short" ? "bearish" : "neutral") as "bullish" | "bearish" | "neutral" }))
@@ -317,6 +340,19 @@ export default function BacktestLoopPage() {
     // Step 6: line coloured on days where ALL requirements 1-4 hold (setup valid, awaiting entry signal)
     : activeStep === 6 ? setupHist.map(p => ({ time: p.time, value: p.close, trend: (p.valid ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
     : undefined;
+
+  // Legend label per trend, per step — used to hide segments via legend clicks
+  const trendLabels: Record<number, Record<string, string>> = {
+    2: { bullish: "Bullish structure", bearish: "Bearish structure", neutral: "Neutral" },
+    3: { bullish: "50 EMA — longs only", bearish: "50 EMA — shorts only" },
+    4: { bullish: "Long allowed", bearish: "Short allowed", neutral: "No trade" },
+    5: { bullish: "Score pass (long)", bearish: "Score pass (short)", neutral: "Below threshold" },
+    6: { bullish: "Setup valid (long)", bearish: "Setup valid (short)", neutral: "No setup" },
+  };
+  const regimeLine = regimeLineRaw?.map(p => {
+    const label = activeStep != null ? trendLabels[activeStep]?.[p.trend] : undefined;
+    return label && hidden.has(label) ? { ...p, trend: "hidden" as const } : p;
+  });
 
   const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
   const shorts = result?.trades?.filter((t: { direction: string }) => t.direction === "short").length ?? 0;
@@ -909,60 +945,20 @@ export default function BacktestLoopPage() {
 
         <div style={{ marginLeft: "auto", padding: "14px 18px", display: "flex", gap: 14, alignItems: "center" }}>
           {activeStep === 1 ? (
-            <>
-              {[{ c: "#10b981", l: "HH / HL (bullish)" }, { c: "#f97316", l: "LH" }, { c: "#ef4444", l: "LL (bearish)" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "HH / HL (bullish)" }, { c: "#f97316", l: "LH" }, { c: "#ef4444", l: "LL (bearish)" }], "dot")}</>
           ) : activeStep === 2 ? (
-            <>
-              {[{ c: "#10b981", l: "Bullish structure" }, { c: "#ef4444", l: "Bearish structure" }, { c: "#64748b", l: "Neutral" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "Bullish structure" }, { c: "#ef4444", l: "Bearish structure" }, { c: "#64748b", l: "Neutral" }])}</>
           ) : activeStep === 3 ? (
-            <>
-              {[{ c: "#10b981", l: "50 EMA — longs only" }, { c: "#ef4444", l: "50 EMA — shorts only" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "50 EMA — longs only" }, { c: "#ef4444", l: "50 EMA — shorts only" }])}</>
           ) : activeStep === 4 ? (
-            <>
-              {[{ c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" },
-                { c: "#a855f7", l: "W 50 EMA" }, { c: "#f59e0b", l: "D 50 EMA" }, { c: "#06b6d4", l: "4H 50 EMA" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([
+              { c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" },
+              { c: "#a855f7", l: "W 50 EMA" }, { c: "#f59e0b", l: "D 50 EMA" }, { c: "#06b6d4", l: "4H 50 EMA" },
+            ])}</>
           ) : activeStep === 5 ? (
-            <>
-              {[{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }])}</>
           ) : activeStep === 6 ? (
-            <>
-              {[{ c: "#10b981", l: "Setup valid (long)" }, { c: "#ef4444", l: "Setup valid (short)" }, { c: "#64748b", l: "No setup" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "Setup valid (long)" }, { c: "#ef4444", l: "Setup valid (short)" }, { c: "#64748b", l: "No setup" }])}</>
           ) : (
             <>
               {[{ c: "var(--teal)", l: "Long" }, { c: "var(--red)", l: "Short" }, { c: "var(--blue)", l: "TP" }, { c: "var(--yellow)", l: "SL" }].map(x => (
@@ -990,7 +986,7 @@ export default function BacktestLoopPage() {
               { label: "W 50 EMA",  color: "#a855f7", points: emaWeekly },
               { label: "D 50 EMA",  color: "#f59e0b", points: emaData.map(p => ({ time: p.time, value: p.value })) },
               { label: "4H 50 EMA", color: "#06b6d4", points: emaH4, dashed: true },
-            ] : undefined}
+            ].filter(l => !hidden.has(l.label)) : undefined}
             height={480}
             highlightTrade={highlightTrade} tradeRanges={tradeRanges} onTradeClick={selectTrade} />
         ) : (

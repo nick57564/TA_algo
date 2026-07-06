@@ -32,7 +32,7 @@ export interface SignalMarker {
 }
 
 export interface MAPoint { time: number; value: number; }
-export interface RegimePoint { time: number; value: number; trend: "bullish" | "bearish" | "neutral"; }
+export interface RegimePoint { time: number; value: number; trend: "bullish" | "bearish" | "neutral" | "hidden"; }
 export interface HighlightTrade { entryTime: number; exitTime: number; direction: "long" | "short"; }
 export interface TradeRange { entryTime: number; exitTime: number; }
 
@@ -138,7 +138,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       const trendColor: Record<string, string> = { bullish: "#10b981", bearish: "#ef4444", neutral: "#64748b" };
       const lastSegIdx = segs.length - 1;
       segs.forEach((seg, si) => {
-        if (seg.pts.length < 2) return;
+        if (seg.pts.length < 2 || seg.trend === "hidden") return;
         const isLast = si === lastSegIdx;
         const s = chart.addSeries(LineSeries, {
           color: trendColor[seg.trend] ?? "#64748b",
