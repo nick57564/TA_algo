@@ -193,6 +193,7 @@ interface EntrySignal {
   dir: "long" | "short";
   kind: "SoS" | "Engulfing";
   reason: string;
+  steps: string[];
 }
 
 export default function BacktestLoopPage() {
@@ -884,19 +885,27 @@ export default function BacktestLoopPage() {
 
         {activeStep === 7 && !swingLoading && entrySigs.length > 0 && (
           <div style={{ marginTop: 10, background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "14px 18px" }}>
-            <p style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 800, marginBottom: 9 }}>Entry list — why each entry appeared</p>
+            <p style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 800, marginBottom: 4 }}>Entry list — applied steps for every entry</p>
+            <p style={{ color: "#64748b", fontSize: 11, marginBottom: 10 }}>Open an entry to see exactly how Steps 1–7 produced it.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 7, maxHeight: 340, overflowY: "auto", paddingRight: 4 }}>
               {[...entrySigs].reverse().map((signal, i) => {
                 const sideColor = signal.dir === "long" ? "#10b981" : "#ef4444";
                 return (
-                  <div key={`${signal.time}-${signal.kind}-${i}`} style={{ display: "grid", gridTemplateColumns: "175px 135px minmax(300px, 1fr)", gap: 14, alignItems: "center", background: "#1e293b", border: "1px solid #334155", borderLeft: `3px solid ${sideColor}`, borderRadius: 8, padding: "9px 12px" }}>
-                    <div>
-                      <p style={{ color: "#f1f5f9", fontSize: 12, fontWeight: 800 }}>{new Date(signal.time).toLocaleString()}</p>
-                      <p style={{ color: "#64748b", fontSize: 11, marginTop: 2 }}>${signal.price.toLocaleString()}</p>
+                  <details key={`${signal.time}-${signal.kind}-${i}`} style={{ background: "#1e293b", border: "1px solid #334155", borderLeft: `3px solid ${sideColor}`, borderRadius: 8, padding: "9px 12px" }}>
+                    <summary style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "185px 165px minmax(250px, 1fr)", gap: 14, alignItems: "center", listStylePosition: "outside" }}>
+                      <span style={{ color: "#f1f5f9", fontSize: 12, fontWeight: 800 }}>{new Date(signal.time).toLocaleString()}</span>
+                      <span style={{ color: sideColor, fontSize: 11, fontWeight: 900 }}>{signal.dir.toUpperCase()} · {signal.kind === "SoS" ? "SHIFT OF STRUCTURE" : "ENGULFING"}</span>
+                      <span style={{ color: "#94a3b8", fontSize: 11 }}>${signal.price.toLocaleString()} · click to view Steps 1–7</span>
+                    </summary>
+                    <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid #334155", display: "flex", flexDirection: "column", gap: 6 }}>
+                      {signal.steps.map((detail, stepIndex) => (
+                        <div key={stepIndex} style={{ display: "grid", gridTemplateColumns: "72px 1fr", gap: 9, alignItems: "start" }}>
+                          <span style={{ color: stepIndex === 6 ? sideColor : "#60a5fa", fontSize: 10, fontWeight: 900, textTransform: "uppercase" }}>Step {stepIndex + 1}</span>
+                          <span style={{ color: "#cbd5e1", fontSize: 12, lineHeight: 1.4 }}>{detail}</span>
+                        </div>
+                      ))}
                     </div>
-                    <p style={{ color: sideColor, fontSize: 11, fontWeight: 900 }}>{signal.dir.toUpperCase()} · {signal.kind === "SoS" ? "SHIFT OF STRUCTURE" : "ENGULFING"}</p>
-                    <p style={{ color: "#cbd5e1", fontSize: 12, lineHeight: 1.4 }}>{signal.reason}</p>
-                  </div>
+                  </details>
                 );
               })}
             </div>

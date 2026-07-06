@@ -513,7 +513,7 @@ export async function POST(req: NextRequest) {
     //   • Bullish/Bearish Engulfing candle in the trade direction
     const entrySignals: {
       time: number; price: number; dir: "long" | "short"; kind: "SoS" | "Engulfing";
-      reason: string;
+      reason: string; steps: string[];
     }[] = [];
     if (h4Bars.length) {
       let dp = 0;   // last COMPLETED daily bar before the 4H bar
@@ -555,8 +555,23 @@ export async function POST(req: NextRequest) {
               ? `Bullish 4H body ${b.open.toFixed(2)}→${b.close.toFixed(2)} engulfed the previous bearish body ${prev.open.toFixed(2)}→${prev.close.toFixed(2)}.`
               : `Bearish 4H body ${b.open.toFixed(2)}→${b.close.toFixed(2)} engulfed the previous bullish body ${prev.open.toFixed(2)}→${prev.close.toFixed(2)}.`;
           }
+          const scores = scoreHistory[dp];
+          const trends = htf[dp];
+          const dailyBar = bars[dp];
+          const dailyEma = emaArr[dp];
+          const passingScores = [scores.w, scores.d, scores.h].filter(score => score >= 45).length;
+          const fmtLevel = (value: number | undefined) => value == null ? "not available" : value.toFixed(2);
+          const steps = [
+            `Swing detection: last confirmed 4H swing high ${fmtLevel(lastH?.price)} and swing low ${fmtLevel(lastL?.price)}.`,
+            `Market structure: Daily structure was ${trends.daily.toUpperCase()}.`,
+            `Daily EMA filter: close ${dailyBar.close.toFixed(2)} was ${dir === "long" ? "above" : "below"} EMA50 ${dailyEma.toFixed(2)}, allowing ${dir.toUpperCase()} only.`,
+            `Higher timeframes: Weekly ${trends.weekly}, Daily ${trends.daily}, 4H ${trends.h4}; confirmation allowed ${trends.allowed.toUpperCase()}.`,
+            `Timeframe scoring: W ${scores.w}/60, D ${scores.d}/60, 4H ${scores.h}/60; ${passingScores} of 3 reached 45 and total was ${scores.total}/180.`,
+            `Trade requirements: EMA direction, HTF alignment, 2-of-3 score threshold and 120 total all passed.`,
+            `Entry signal: ${reason}`,
+          ];
           entrySignals.push({
-            time: t, price: b.close, dir, kind, reason,
+            time: t, price: b.close, dir, kind, reason, steps,
           });
         }
       }
