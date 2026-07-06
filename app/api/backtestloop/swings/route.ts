@@ -505,6 +505,45 @@ export async function POST(req: NextRequest) {
     }
     const htfNow = htf[htf.length - 1];
 
+    // ── Step 7: entry signals on the 4H chart ────────────────────────────────
+    // Only on days where the step 6 setup is VALID, the bot watches the 4H
+    // chart for either:
+    //   • Shift of Structure (SoS): a 4H close breaking the last confirmed
+    //     4H swing high (long) / swing low (short)
+    //   • Bullish/Bearish Engulfing candle in the trade direction
+    const entrySignals: { time: number; price: number; dir: "long" | "short"; kind: "SoS" | "Engulfing" }[] = [];
+    if (h4Bars.length) {
+      let dp = 0;   // last COMPLETED daily bar before the 4H bar
+      let swp = 0;
+      let lastH: { price: number } | null = null;
+      let lastL: { price: number } | null = null;
+      for (let j = 1; j < h4Bars.length; j++) {
+        const t = h4Bars[j].time;
+        while (dp + 1 < setupHistory.length && setupHistory[dp + 1].time + 86_400_000 <= t) dp++;
+        while (swp < h4Swings.length && h4Swings[swp].barIdx + 1 <= j) {
+          const s = h4Swings[swp];
+          if (s.type === "high") lastH = s; else lastL = s;
+          swp++;
+        }
+        const setup = setupHistory[dp];
+        if (!setup?.valid) continue;
+        const dir  = setup.dir;
+        const b    = h4Bars[j];
+        const prev = h4Bars[j - 1];
+        const bullEng = prev.close < prev.open && b.open <= prev.close && b.close > prev.open;
+        const bearEng = prev.close > prev.open && b.open >= prev.close && b.close < prev.open;
+        let kind: "SoS" | "Engulfing" | null = null;
+        if (dir === "long") {
+          if (lastH && prev.close <= lastH.price && b.close > lastH.price) kind = "SoS";
+          else if (bullEng) kind = "Engulfing";
+        } else {
+          if (lastL && prev.close >= lastL.price && b.close < lastL.price) kind = "SoS";
+          else if (bearEng) kind = "Engulfing";
+        }
+        if (kind) entrySignals.push({ time: t, price: b.close, dir, kind });
+      }
+    }
+
     // Step 5: full breakdown at the CURRENT bar for the panel
     const lastI   = bars.length - 1;
     const dirNow: "long" | "short" = lastBar.close > emaArr[lastI] ? "long" : "short";
@@ -557,6 +596,8 @@ export async function POST(req: NextRequest) {
       // Step 6: trade requirements checklist
       setup_history: setupHistory,        // per daily bar: conditions 1-4 + valid flag
       setup_now: setupHistory[setupHistory.length - 1] ?? null,
+      // Step 7: entry signals (SoS / engulfing on 4H, only when setup valid)
+      entry_signals: entrySignals,
     });
   } catch (e) {
     console.error(e);

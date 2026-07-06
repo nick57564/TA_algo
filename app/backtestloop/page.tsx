@@ -19,7 +19,7 @@ const STEPS = [
   { id: 4, label: "HTF Confirmation", desc: "Long: Weekly+Daily OR Daily+4H bullish · Short: same but bearish · else no trade" },
   { id: 5, label: "TF Scoring", desc: "Weekly / Daily / 4H each scored 0-60 on 7 criteria" },
   { id: 6, label: "Trade Requirements", desc: "ALL must be true: EMA direction · HTF aligned · 2×45+ scores · 120+ total · entry signal" },
-  // Step 7 will be added next
+  { id: 7, label: "Entry Signal", desc: "SoS or engulfing on the 4H — only fires when the step 6 setup is valid" },
 ];
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -187,6 +187,12 @@ interface SetupPoint {
   valid: boolean;
 }
 
+interface EntrySignal {
+  time: number; price: number;
+  dir: "long" | "short";
+  kind: "SoS" | "Engulfing";
+}
+
 export default function BacktestLoopPage() {
   const [result,   setResult]   = useState<BacktestResult | null>(null);
   const [candles,  setCandles]  = useState<Candle[]>([]);
@@ -218,6 +224,7 @@ export default function BacktestLoopPage() {
   const [emaWeekly,    setEmaWeekly]    = useState<{ time: number; value: number }[]>([]);
   const [emaH4,        setEmaH4]        = useState<{ time: number; value: number }[]>([]);
   const [hidden,       setHidden]       = useState<Set<string>>(new Set());
+  const [entrySigs,    setEntrySigs]    = useState<EntrySignal[]>([]);
 
   const toggleLine = (label: string) => setHidden(prev => {
     const next = new Set(prev);
@@ -274,6 +281,7 @@ export default function BacktestLoopPage() {
         setSetupNow(d.setup_now ?? null);
         setEmaWeekly(d.ema50_weekly ?? []);
         setEmaH4(d.ema50_h4 ?? []);
+        setEntrySigs(d.entry_signals ?? []);
       }
     } catch {}
     setSwingLoading(false);
@@ -319,10 +327,19 @@ export default function BacktestLoopPage() {
     price:     e.price,
   }));
 
+  // Step 7: entry signal markers (SoS / engulfing on the 4H)
+  const entryMarkers: SignalMarker[] = entrySigs.map(s => ({
+    time:      s.time,
+    direction: s.dir,
+    type:      `${s.kind} Entry`,
+    price:     s.price,
+  }));
+
   const markers: SignalMarker[] =
     activeStep === 1 ? swingMarkers
     : activeStep === 2 ? [...swingMarkers, ...breakMarkers]
     : activeStep === 3 || activeStep === 4 || activeStep === 5 || activeStep === 6 ? []
+    : activeStep === 7 ? entryMarkers
     : result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
         time: new Date(s.timestamp).getTime(), direction: s.direction, type: s.type, price: s.price,
       })) ?? [];
@@ -337,8 +354,8 @@ export default function BacktestLoopPage() {
     : activeStep === 4 ? htf.map(p => ({ time: p.time, value: p.close, trend: (p.allowed === "long" ? "bullish" : p.allowed === "short" ? "bearish" : "neutral") as "bullish" | "bearish" | "neutral" }))
     // Step 5: line coloured by score pass — green/red when 2 of 3 TFs >= 45 AND total >= 120 (direction from EMA), grey otherwise
     : activeStep === 5 ? scoreHist.map(p => ({ time: p.time, value: p.close, trend: (p.pass ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
-    // Step 6: line coloured on days where ALL requirements 1-4 hold (setup valid, awaiting entry signal)
-    : activeStep === 6 ? setupHist.map(p => ({ time: p.time, value: p.close, trend: (p.valid ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
+    // Step 6 & 7: line coloured on days where ALL requirements 1-4 hold (setup valid)
+    : activeStep === 6 || activeStep === 7 ? setupHist.map(p => ({ time: p.time, value: p.close, trend: (p.valid ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
     : undefined;
 
   // Legend label per trend, per step — used to hide segments via legend clicks
@@ -348,6 +365,7 @@ export default function BacktestLoopPage() {
     4: { bullish: "Long allowed", bearish: "Short allowed", neutral: "No trade" },
     5: { bullish: "Score pass (long)", bearish: "Score pass (short)", neutral: "Below threshold" },
     6: { bullish: "Setup valid (long)", bearish: "Setup valid (short)", neutral: "No setup" },
+    7: { bullish: "Setup valid (long)", bearish: "Setup valid (short)", neutral: "No setup" },
   };
   const regimeLine = regimeLineRaw?.map(p => {
     const label = activeStep != null ? trendLabels[activeStep]?.[p.trend] : undefined;
@@ -378,7 +396,7 @@ export default function BacktestLoopPage() {
         <div style={{ marginRight: 4 }}>
           <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>Market Structure Bot</h1>
           <p style={{ fontSize: 14, color: "var(--muted)", marginTop: 3 }}>
-            Multi-timeframe · Swing H/L structure · Scoring 0–60 per TF · 1:3 RR
+            Steps 1–8 · Structure + HTF + scoring · Entry: SoS/engulf on 4H · 1% risk · SL at HL/LH · TP 1:3
           </p>
         </div>
 
@@ -776,6 +794,69 @@ export default function BacktestLoopPage() {
             )}
           </div>
         )}
+
+        {/* Step 7 info panel */}
+        {activeStep === 7 && (
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 7 — Entry Signal (4H chart)</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#3b82f6", fontWeight: 800, flexShrink: 0 }}>SoS</span>
+                  <span>Shift of Structure — a 4H close breaks the last confirmed 4H swing high (long) or swing low (short)</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#d2a8ff", fontWeight: 800, flexShrink: 0 }}>Engulf</span>
+                  <span>Bullish/Bearish Engulfing candle in the trade direction</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                  Signals only fire on days where the <strong>step 6 setup is valid</strong> — all previous conditions must be met first. The arrows on the chart are the actual entry moments; the coloured line shows the setup-valid window.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {swingLoading ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#64748b", fontSize: 14 }}>
+                  <span style={{ width: 14, height: 14, border: "2px solid #334155", borderTopColor: "#10b981", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+                  Scanning…
+                </div>
+              ) : (
+                <>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Entry Signals</p>
+                    <p style={{ fontSize: 28, fontWeight: 800, color: "#f1f5f9" }}>{entrySigs.length}</p>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                      <span style={{ color: "#10b981" }}>{entrySigs.filter(s => s.dir === "long").length} long</span>
+                      {" · "}
+                      <span style={{ color: "#ef4444" }}>{entrySigs.filter(s => s.dir === "short").length} short</span>
+                    </p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>SoS / Engulfing</p>
+                    <p style={{ fontSize: 20, fontWeight: 800, color: "#f1f5f9", marginTop: 6 }}>
+                      {entrySigs.filter(s => s.kind === "SoS").length} · {entrySigs.filter(s => s.kind === "Engulfing").length}
+                    </p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Last Signal</p>
+                    <p style={{ fontSize: 14, fontWeight: 800, color: "#f1f5f9", marginTop: 6 }}>
+                      {entrySigs.length
+                        ? `${entrySigs[entrySigs.length - 1].kind} ${entrySigs[entrySigs.length - 1].dir.toUpperCase()} · ${new Date(entrySigs[entrySigs.length - 1].time).toLocaleDateString()}`
+                        : "—"}
+                    </p>
+                  </div>
+                  <div style={{ background: setupNow?.valid ? (setupNow.dir === "long" ? "rgba(16,185,129,.15)" : "rgba(239,68,68,.15)") : "#1e293b", border: `2px solid ${setupNow?.valid ? (setupNow.dir === "long" ? "#10b981" : "#ef4444") : "#334155"}`, borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Status Now</p>
+                    <p style={{ fontSize: 14, fontWeight: 800, color: setupNow?.valid ? (setupNow.dir === "long" ? "#10b981" : "#ef4444") : "#64748b", marginTop: 6 }}>
+                      {setupNow?.valid ? `WATCHING 4H FOR ${setupNow.dir.toUpperCase()} SIGNAL` : "NO SETUP — not watching"}
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Chart info bar ── */}
@@ -923,6 +1004,27 @@ export default function BacktestLoopPage() {
               </p>
             </div>
           </>
+        ) : activeStep === 7 ? (
+          <>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#3b82f6" }}>Step 7: Entry Signal</p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Signals</p>
+              <p style={{ fontSize: 16, fontWeight: 800 }}>
+                <span style={{ color: "var(--teal)" }}>{entrySigs.filter(s => s.dir === "long").length}↑</span>
+                {" · "}
+                <span style={{ color: "var(--red)" }}>{entrySigs.filter(s => s.dir === "short").length}↓</span>
+              </p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Status</p>
+              <p style={{ fontSize: 15, fontWeight: 800, color: setupNow?.valid ? (setupNow.dir === "long" ? "var(--teal)" : "var(--red)") : "var(--muted)" }}>
+                {setupNow?.valid ? `WATCHING ${setupNow.dir.toUpperCase()}` : "NOT WATCHING"}
+              </p>
+            </div>
+          </>
         ) : (
           // Normal backtest stats
           <>
@@ -957,7 +1059,7 @@ export default function BacktestLoopPage() {
             ])}</>
           ) : activeStep === 5 ? (
             <>{legendChips([{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }])}</>
-          ) : activeStep === 6 ? (
+          ) : activeStep === 6 || activeStep === 7 ? (
             <>{legendChips([{ c: "#10b981", l: "Setup valid (long)" }, { c: "#ef4444", l: "Setup valid (short)" }, { c: "#64748b", l: "No setup" }])}</>
           ) : (
             <>
