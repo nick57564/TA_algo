@@ -43,13 +43,14 @@ interface Props {
   maLabel?: string;
   regimeLine?: RegimePoint[];
   regimeTitle?: string;   // e.g. "50 EMA" — shown as axis label on the regime line
+  extraLines?: { label: string; color: string; points: MAPoint[]; dashed?: boolean }[];
   height?: number;
   highlightTrade?: HighlightTrade | null;
   tradeRanges?: TradeRange[];
   onTradeClick?: (idx: number) => void;
 }
 
-export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", regimeLine, regimeTitle, height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
+export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", regimeLine, regimeTitle, extraLines, height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -150,6 +151,25 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
         });
         s.setData(seg.pts);
       });
+    }
+
+    // Extra indicator lines (e.g. weekly / daily / 4H 50 EMA in step 4)
+    if (extraLines) {
+      for (const line of extraLines) {
+        if (!line.points.length) continue;
+        const s = chart.addSeries(LineSeries, {
+          color: line.color,
+          lineWidth: 2,
+          lineStyle: line.dashed ? 2 : 0, // 2 = dashed
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: line.label,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(line.points
+          .map(p => ({ time: Math.floor(p.time / 1000) as Time, value: p.value }))
+          .sort((a, b) => (a.time as number) - (b.time as number)));
+      }
     }
 
     // 200-day MA line
@@ -295,7 +315,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       chart.unsubscribeClick(onChartClick);
       chart.remove();
     };
-  }, [candles, signals, regimeLine, height]);
+  }, [candles, signals, regimeLine, extraLines, height]);
 
   // Zoom to highlighted trade + reposition the glow overlay without re-building the chart
   useEffect(() => {

@@ -541,6 +541,9 @@ export async function POST(req: NextRequest) {
       allowed_direction: lastBar.close > emaArr[emaArr.length - 1] ? "long" : "short",
       // Step 4: higher timeframe confirmation
       htf,                                // per daily bar: weekly/daily/4H trend + allowed
+      // 50 EMA per higher timeframe, for display on the daily chart
+      ema50_weekly: weeklyBars.map((b, i) => ({ time: b.time, value: weeklyEma[i] })),
+      ema50_h4:     h4Bars.map((b, i) => ({ time: b.time, value: h4Ema[i] })),
       htf_now: {
         weekly:  htfNow?.weekly ?? "neutral",
         daily:   htfNow?.daily ?? "neutral",

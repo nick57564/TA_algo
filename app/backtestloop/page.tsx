@@ -215,6 +215,8 @@ export default function BacktestLoopPage() {
   const [scoreHist,    setScoreHist]    = useState<ScorePoint[]>([]);
   const [setupHist,    setSetupHist]    = useState<SetupPoint[]>([]);
   const [setupNow,     setSetupNow]     = useState<SetupPoint | null>(null);
+  const [emaWeekly,    setEmaWeekly]    = useState<{ time: number; value: number }[]>([]);
+  const [emaH4,        setEmaH4]        = useState<{ time: number; value: number }[]>([]);
 
   const loadCandles = useCallback(async (sym: string, lim: number) => {
     setLoading(true);
@@ -252,6 +254,8 @@ export default function BacktestLoopPage() {
         setScoreHist(d.score_history ?? []);
         setSetupHist(d.setup_history ?? []);
         setSetupNow(d.setup_now ?? null);
+        setEmaWeekly(d.ema50_weekly ?? []);
+        setEmaH4(d.ema50_h4 ?? []);
       }
     } catch {}
     setSwingLoading(false);
@@ -933,7 +937,8 @@ export default function BacktestLoopPage() {
             </>
           ) : activeStep === 4 ? (
             <>
-              {[{ c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" }].map(x => (
+              {[{ c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" },
+                { c: "#a855f7", l: "W 50 EMA" }, { c: "#f59e0b", l: "D 50 EMA" }, { c: "#06b6d4", l: "4H 50 EMA" }].map(x => (
                 <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
                   <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
@@ -980,7 +985,13 @@ export default function BacktestLoopPage() {
         )}
         {candles.length > 0 ? (
           <CandleChart candles={candles} signals={markers} regimeLine={regimeLine}
-            regimeTitle={activeStep === 3 ? "50 EMA" : undefined} height={480}
+            regimeTitle={activeStep === 3 ? "50 EMA" : undefined}
+            extraLines={activeStep === 4 ? [
+              { label: "W 50 EMA",  color: "#a855f7", points: emaWeekly },
+              { label: "D 50 EMA",  color: "#f59e0b", points: emaData.map(p => ({ time: p.time, value: p.value })) },
+              { label: "4H 50 EMA", color: "#06b6d4", points: emaH4, dashed: true },
+            ] : undefined}
+            height={480}
             highlightTrade={highlightTrade} tradeRanges={tradeRanges} onTradeClick={selectTrade} />
         ) : (
           <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10 }}>
