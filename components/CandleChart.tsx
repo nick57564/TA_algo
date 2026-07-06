@@ -32,7 +32,7 @@ export interface SignalMarker {
 }
 
 export interface MAPoint { time: number; value: number; }
-export interface RegimePoint { time: number; value: number; trend: "bullish" | "bearish" | "neutral"; }
+export interface RegimePoint { time: number; value: number; trend: "bullish" | "bearish" | "neutral" | "hidden"; }
 export interface HighlightTrade { entryTime: number; exitTime: number; direction: "long" | "short"; }
 export interface TradeRange { entryTime: number; exitTime: number; }
 
@@ -42,13 +42,15 @@ interface Props {
   maLine?: MAPoint[];
   maLabel?: string;
   regimeLine?: RegimePoint[];
+  regimeTitle?: string;   // e.g. "50 EMA" — shown as axis label on the regime line
+  extraLines?: { label: string; color: string; points: MAPoint[]; dashed?: boolean }[];
   height?: number;
   highlightTrade?: HighlightTrade | null;
   tradeRanges?: TradeRange[];
   onTradeClick?: (idx: number) => void;
 }
 
-export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", regimeLine, height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
+export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", regimeLine, regimeTitle, extraLines, height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -134,16 +136,39 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
         }
       }
       const trendColor: Record<string, string> = { bullish: "#10b981", bearish: "#ef4444", neutral: "#64748b" };
-      for (const seg of segs) {
-        if (seg.pts.length < 2) continue;
+      const lastSegIdx = segs.length - 1;
+      segs.forEach((seg, si) => {
+        if (seg.pts.length < 2 || seg.trend === "hidden") return;
+        const isLast = si === lastSegIdx;
         const s = chart.addSeries(LineSeries, {
           color: trendColor[seg.trend] ?? "#64748b",
           lineWidth: 3,
           priceLineVisible: false,
-          lastValueVisible: false,
+          // Label the line on the price axis (e.g. "50 EMA") via the last segment
+          lastValueVisible: isLast && !!regimeTitle,
+          title: isLast && regimeTitle ? regimeTitle : undefined,
           crosshairMarkerVisible: false,
         });
         s.setData(seg.pts);
+      });
+    }
+
+    // Extra indicator lines (e.g. weekly / daily / 4H 50 EMA in step 4)
+    if (extraLines) {
+      for (const line of extraLines) {
+        if (!line.points.length) continue;
+        const s = chart.addSeries(LineSeries, {
+          color: line.color,
+          lineWidth: 2,
+          lineStyle: line.dashed ? 2 : 0, // 2 = dashed
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: line.label,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(line.points
+          .map(p => ({ time: Math.floor(p.time / 1000) as Time, value: p.value }))
+          .sort((a, b) => (a.time as number) - (b.time as number)));
       }
     }
 
@@ -290,7 +315,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
       chart.unsubscribeClick(onChartClick);
       chart.remove();
     };
-  }, [candles, signals, regimeLine, height]);
+  }, [candles, signals, regimeLine, extraLines, height]);
 
   // Zoom to highlighted trade + reposition the glow overlay without re-building the chart
   useEffect(() => {

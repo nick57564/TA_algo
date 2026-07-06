@@ -18,8 +18,8 @@ const STEPS = [
   { id: 3, label: "Daily EMA Filter", desc: "Close above 50 EMA = only longs · below = only shorts · never an entry signal" },
   { id: 4, label: "HTF Confirmation", desc: "Long: Weekly+Daily OR Daily+4H bullish · Short: same but bearish · else no trade" },
   { id: 5, label: "TF Scoring", desc: "Weekly / Daily / 4H each scored 0-60 on 7 criteria" },
-  { id: 6, label: "Trade Requirements", desc: "HTF direction agrees · 2 of 3 TFs ≥ 45 · combined score ≥ 120" },
-  // Step 7 and beyond will be added in future iterations
+  { id: 6, label: "Trade Requirements", desc: "ALL must be true: EMA direction · HTF aligned · 2×45+ scores · 120+ total · entry signal" },
+  { id: 7, label: "Entry Signal", desc: "SoS or engulfing on the 4H — only fires when the step 6 setup is valid" },
 ];
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -180,11 +180,17 @@ interface ScorePoint {
   dir: "long" | "short";
 }
 
-interface RequirementsPoint {
+interface SetupPoint {
   time: number; close: number;
   dir: "long" | "short";
-  htfPass: boolean; timeframePasses: number;
-  total: number; scorePass: boolean; eligible: boolean;
+  c1: boolean; c2: boolean; c3: boolean; c4: boolean;
+  valid: boolean;
+}
+
+interface EntrySignal {
+  time: number; price: number;
+  dir: "long" | "short";
+  kind: "SoS" | "Engulfing";
 }
 
 export default function BacktestLoopPage() {
@@ -213,8 +219,29 @@ export default function BacktestLoopPage() {
   const [htfNow,       setHtfNow]       = useState<HtfNow | null>(null);
   const [scoreNow,     setScoreNow]     = useState<ScoreNow | null>(null);
   const [scoreHist,    setScoreHist]    = useState<ScorePoint[]>([]);
-  const [requirementsNow, setRequirementsNow] = useState<RequirementsPoint | null>(null);
-  const [requirementsHist, setRequirementsHist] = useState<RequirementsPoint[]>([]);
+  const [setupHist,    setSetupHist]    = useState<SetupPoint[]>([]);
+  const [setupNow,     setSetupNow]     = useState<SetupPoint | null>(null);
+  const [emaWeekly,    setEmaWeekly]    = useState<{ time: number; value: number }[]>([]);
+  const [emaH4,        setEmaH4]        = useState<{ time: number; value: number }[]>([]);
+  const [hidden,       setHidden]       = useState<Set<string>>(new Set());
+  const [entrySigs,    setEntrySigs]    = useState<EntrySignal[]>([]);
+
+  const toggleLine = (label: string) => setHidden(prev => {
+    const next = new Set(prev);
+    if (next.has(label)) next.delete(label); else next.add(label);
+    return next;
+  });
+
+  // Clickable legend chips: click to hide/show the matching line or markers
+  const legendChips = (items: { c: string; l: string }[], shape: "dot" | "bar" = "bar") => items.map(x => (
+    <div key={x.l} onClick={() => toggleLine(x.l)} title="Click to hide/show"
+      style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", opacity: hidden.has(x.l) ? 0.3 : 1, transition: "opacity .12s" }}>
+      {shape === "dot"
+        ? <div style={{ width: 10, height: 10, borderRadius: "50%", background: x.c }} />
+        : <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />}
+      <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, textDecoration: hidden.has(x.l) ? "line-through" : "none" }}>{x.l}</span>
+    </div>
+  ));
 
   const loadCandles = useCallback(async (sym: string, lim: number) => {
     setLoading(true);
@@ -250,8 +277,11 @@ export default function BacktestLoopPage() {
         setHtfNow(d.htf_now ?? null);
         setScoreNow(d.score_now ?? null);
         setScoreHist(d.score_history ?? []);
-        setRequirementsNow(d.requirements_now ?? null);
-        setRequirementsHist(d.requirements_history ?? []);
+        setSetupHist(d.setup_history ?? []);
+        setSetupNow(d.setup_now ?? null);
+        setEmaWeekly(d.ema50_weekly ?? []);
+        setEmaH4(d.ema50_h4 ?? []);
+        setEntrySigs(d.entry_signals ?? []);
       }
     } catch {}
     setSwingLoading(false);
@@ -279,12 +309,17 @@ export default function BacktestLoopPage() {
   }
 
   // Build chart markers depending on the active step
-  const swingMarkers: SignalMarker[] = swings.map(s => ({
-    time:      s.time,
-    direction: s.type === "low" ? "long" : "short",
-    type:      s.label, // "HH" | "LH" | "HL" | "LL"
-    price:     s.price,
-  }));
+  const swingMarkers: SignalMarker[] = swings
+    .filter(s =>
+      !(hidden.has("HH / HL (bullish)") && (s.label === "HH" || s.label === "HL")) &&
+      !(hidden.has("LH") && s.label === "LH") &&
+      !(hidden.has("LL (bearish)") && s.label === "LL"))
+    .map(s => ({
+      time:      s.time,
+      direction: s.type === "low" ? "long" : "short",
+      type:      s.label, // "HH" | "LH" | "HL" | "LL"
+      price:     s.price,
+    }));
   const breakMarkers: SignalMarker[] = structEvents.map(e => ({
     time:      e.time,
     direction: e.newTrend === "bullish" ? "long" : "short",
@@ -292,10 +327,19 @@ export default function BacktestLoopPage() {
     price:     e.price,
   }));
 
+  // Step 7: entry signal markers (SoS / engulfing on the 4H)
+  const entryMarkers: SignalMarker[] = entrySigs.map(s => ({
+    time:      s.time,
+    direction: s.dir,
+    type:      `${s.kind} Entry`,
+    price:     s.price,
+  }));
+
   const markers: SignalMarker[] =
     activeStep === 1 ? swingMarkers
     : activeStep === 2 ? [...swingMarkers, ...breakMarkers]
     : activeStep === 3 || activeStep === 4 || activeStep === 5 || activeStep === 6 ? []
+    : activeStep === 7 ? entryMarkers
     : result?.signals?.map((s: { timestamp: string; direction: "long"|"short"; type: string; price: number }) => ({
         time: new Date(s.timestamp).getTime(), direction: s.direction, type: s.type, price: s.price,
       })) ?? [];
@@ -304,14 +348,29 @@ export default function BacktestLoopPage() {
   // Step 3: the 50 EMA itself, coloured by allowed direction (green = longs only, red = shorts only)
   // Step 4: line along the closes coloured by ALLOWED trade direction
   //   green = long allowed · red = short allowed · grey = no trade
-  const regimeLine =
+  const regimeLineRaw =
     activeStep === 2 ? regime.map(p => ({ time: p.time, value: p.close, trend: p.trend }))
     : activeStep === 3 ? emaData.map(p => ({ time: p.time, value: p.value, trend: (p.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish" }))
     : activeStep === 4 ? htf.map(p => ({ time: p.time, value: p.close, trend: (p.allowed === "long" ? "bullish" : p.allowed === "short" ? "bearish" : "neutral") as "bullish" | "bearish" | "neutral" }))
     // Step 5: line coloured by score pass — green/red when 2 of 3 TFs >= 45 AND total >= 120 (direction from EMA), grey otherwise
     : activeStep === 5 ? scoreHist.map(p => ({ time: p.time, value: p.close, trend: (p.pass ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
-    : activeStep === 6 ? requirementsHist.map(p => ({ time: p.time, value: p.close, trend: (p.eligible ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
+    // Step 6 & 7: line coloured on days where ALL requirements 1-4 hold (setup valid)
+    : activeStep === 6 || activeStep === 7 ? setupHist.map(p => ({ time: p.time, value: p.close, trend: (p.valid ? (p.dir === "long" ? "bullish" : "bearish") : "neutral") as "bullish" | "bearish" | "neutral" }))
     : undefined;
+
+  // Legend label per trend, per step — used to hide segments via legend clicks
+  const trendLabels: Record<number, Record<string, string>> = {
+    2: { bullish: "Bullish structure", bearish: "Bearish structure", neutral: "Neutral" },
+    3: { bullish: "50 EMA — longs only", bearish: "50 EMA — shorts only" },
+    4: { bullish: "Long allowed", bearish: "Short allowed", neutral: "No trade" },
+    5: { bullish: "Score pass (long)", bearish: "Score pass (short)", neutral: "Below threshold" },
+    6: { bullish: "Setup valid (long)", bearish: "Setup valid (short)", neutral: "No setup" },
+    7: { bullish: "Setup valid (long)", bearish: "Setup valid (short)", neutral: "No setup" },
+  };
+  const regimeLine = regimeLineRaw?.map(p => {
+    const label = activeStep != null ? trendLabels[activeStep]?.[p.trend] : undefined;
+    return label && hidden.has(label) ? { ...p, trend: "hidden" as const } : p;
+  });
 
   const longs  = result?.trades?.filter((t: { direction: string }) => t.direction === "long").length  ?? 0;
   const shorts = result?.trades?.filter((t: { direction: string }) => t.direction === "short").length ?? 0;
@@ -337,7 +396,7 @@ export default function BacktestLoopPage() {
         <div style={{ marginRight: 4 }}>
           <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>Market Structure Bot</h1>
           <p style={{ fontSize: 14, color: "var(--muted)", marginTop: 3 }}>
-            Multi-timeframe · Swing H/L structure · Scoring 0–60 per TF · 1:3 RR
+            Steps 1–8 · Structure + HTF + scoring · Entry: SoS/engulf on 4H · 1% risk · SL at HL/LH · TP 1:3
           </p>
         </div>
 
@@ -680,41 +739,121 @@ export default function BacktestLoopPage() {
 
         {/* Step 6 info panel */}
         {activeStep === 6 && (
-          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 280 }}>
-              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 6 — Trade Requirements</p>
-              <p style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
-                A bar becomes eligible only when the daily EMA direction agrees with step 4, at least two timeframe scores reach 45, and the combined score reaches 120. Step 6 qualifies a setup; it does not enter a trade.
-              </p>
-              {requirementsHist.length > 0 && (
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 6 — Trade Requirements (ALL must be true)</p>
+              <div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                A trade may only be taken when every requirement below holds. The chart shows the days where
+                requirements 1–4 were all met — those are the days the bot is <strong style={{ color: "#f1f5f9" }}>allowed to look for an entry</strong>.
+                Requirement 5 (the entry signal itself) is step 7.
+              </div>
+              {setupHist.length > 0 && (
                 <p style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
-                  Eligible setups in this period: <strong style={{ color: "#f1f5f9" }}>{requirementsHist.filter(p => p.eligible).length}</strong> of {requirementsHist.length} days
+                  Setup-valid days: <strong style={{ color: "#f1f5f9" }}>{setupHist.filter(p => p.valid).length}</strong> of {setupHist.length}
+                  {" "}(<span style={{ color: "#10b981" }}>{setupHist.filter(p => p.valid && p.dir === "long").length} long</span>
+                  {" · "}
+                  <span style={{ color: "#ef4444" }}>{setupHist.filter(p => p.valid && p.dir === "short").length} short</span>)
                 </p>
               )}
             </div>
 
             {swingLoading ? (
-              <div style={{ color: "#64748b", fontSize: 14 }}>Checking requirements…</div>
-            ) : requirementsNow && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(150px, 1fr))", gap: 8 }}>
-                {[
-                  { label: "HTF agrees", pass: requirementsNow.htfPass, value: requirementsNow.htfPass ? requirementsNow.dir.toUpperCase() : "NO" },
-                  { label: "TFs ≥ 45", pass: requirementsNow.timeframePasses >= 2, value: `${requirementsNow.timeframePasses} / 3` },
-                  { label: "Combined ≥ 120", pass: requirementsNow.total >= 120, value: `${requirementsNow.total} / 180` },
-                ].map(item => (
-                  <div key={item.label} style={{ padding: "12px 14px", borderRadius: 9, background: item.pass ? "rgba(16,185,129,.1)" : "rgba(239,68,68,.08)", border: `1px solid ${item.pass ? "rgba(16,185,129,.35)" : "rgba(239,68,68,.3)"}` }}>
-                    <p style={{ color: "#94a3b8", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em" }}>{item.label}</p>
-                    <p style={{ color: item.pass ? "#10b981" : "#ef4444", fontSize: 16, fontWeight: 800, marginTop: 4 }}>{item.pass ? "✓ " : "✕ "}{item.value}</p>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#64748b", fontSize: 14 }}>
+                <span style={{ width: 14, height: 14, border: "2px solid #334155", borderTopColor: "#10b981", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+                Checking…
+              </div>
+            ) : setupNow && (
+              <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "14px 18px", minWidth: 320 }}>
+                <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>
+                  Checklist today — direction: <span style={{ color: setupNow.dir === "long" ? "#10b981" : "#ef4444", fontWeight: 800 }}>{setupNow.dir.toUpperCase()}</span>
+                </p>
+                {([
+                  ["1. Daily EMA agrees with direction", setupNow.c1],
+                  ["2. Higher timeframes aligned", setupNow.c2],
+                  ["3. At least 2 of 3 TFs score ≥ 45", setupNow.c3],
+                  ["4. Combined score ≥ 120 / 180", setupNow.c4],
+                ] as const).map(([label, ok]) => (
+                  <div key={label} style={{ display: "flex", gap: 10, alignItems: "center", padding: "5px 0", borderBottom: "1px solid #273449" }}>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: ok ? "#10b981" : "#ef4444", width: 18 }}>{ok ? "✓" : "✗"}</span>
+                    <span style={{ fontSize: 13, color: ok ? "#e2e8f0" : "#64748b" }}>{label}</span>
                   </div>
                 ))}
+                <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "5px 0" }}>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: "#f59e0b", width: 18 }}>⏳</span>
+                  <span style={{ fontSize: 13, color: "#94a3b8" }}>5. Valid entry signal — step 7</span>
+                </div>
+                <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, textAlign: "center", fontWeight: 800, fontSize: 14,
+                  background: setupNow.valid ? (setupNow.dir === "long" ? "rgba(16,185,129,.15)" : "rgba(239,68,68,.15)") : "#0f172a",
+                  border: `2px solid ${setupNow.valid ? (setupNow.dir === "long" ? "#10b981" : "#ef4444") : "#334155"}`,
+                  color: setupNow.valid ? (setupNow.dir === "long" ? "#10b981" : "#ef4444") : "#64748b" }}>
+                  {setupNow.valid
+                    ? `SETUP VALID — waiting for ${setupNow.dir.toUpperCase()} entry signal`
+                    : "NO SETUP — requirements not met"}
+                </div>
               </div>
             )}
+          </div>
+        )}
 
-            <div style={{ minWidth: 150, textAlign: "center", padding: "14px 18px", borderRadius: 10, background: requirementsNow?.eligible ? "rgba(16,185,129,.12)" : "rgba(100,116,139,.12)", border: `1px solid ${requirementsNow?.eligible ? "rgba(16,185,129,.4)" : "#334155"}` }}>
-              <p style={{ color: "#64748b", fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em" }}>Verdict</p>
-              <p style={{ color: requirementsNow?.eligible ? "#10b981" : "#94a3b8", fontSize: 17, fontWeight: 900, marginTop: 5 }}>
-                {requirementsNow?.eligible ? `${requirementsNow.dir.toUpperCase()} SETUP` : "WAIT"}
-              </p>
+        {/* Step 7 info panel */}
+        {activeStep === 7 && (
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 7 — Entry Signal (4H chart)</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#3b82f6", fontWeight: 800, flexShrink: 0 }}>SoS</span>
+                  <span>Shift of Structure — a 4H close breaks the last confirmed 4H swing high (long) or swing low (short)</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#d2a8ff", fontWeight: 800, flexShrink: 0 }}>Engulf</span>
+                  <span>Bullish/Bearish Engulfing candle in the trade direction</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                  Signals only fire on days where the <strong>step 6 setup is valid</strong> — all previous conditions must be met first. The arrows on the chart are the actual entry moments; the coloured line shows the setup-valid window.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {swingLoading ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#64748b", fontSize: 14 }}>
+                  <span style={{ width: 14, height: 14, border: "2px solid #334155", borderTopColor: "#10b981", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
+                  Scanning…
+                </div>
+              ) : (
+                <>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Entry Signals</p>
+                    <p style={{ fontSize: 28, fontWeight: 800, color: "#f1f5f9" }}>{entrySigs.length}</p>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                      <span style={{ color: "#10b981" }}>{entrySigs.filter(s => s.dir === "long").length} long</span>
+                      {" · "}
+                      <span style={{ color: "#ef4444" }}>{entrySigs.filter(s => s.dir === "short").length} short</span>
+                    </p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>SoS / Engulfing</p>
+                    <p style={{ fontSize: 20, fontWeight: 800, color: "#f1f5f9", marginTop: 6 }}>
+                      {entrySigs.filter(s => s.kind === "SoS").length} · {entrySigs.filter(s => s.kind === "Engulfing").length}
+                    </p>
+                  </div>
+                  <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Last Signal</p>
+                    <p style={{ fontSize: 14, fontWeight: 800, color: "#f1f5f9", marginTop: 6 }}>
+                      {entrySigs.length
+                        ? `${entrySigs[entrySigs.length - 1].kind} ${entrySigs[entrySigs.length - 1].dir.toUpperCase()} · ${new Date(entrySigs[entrySigs.length - 1].time).toLocaleDateString()}`
+                        : "—"}
+                    </p>
+                  </div>
+                  <div style={{ background: setupNow?.valid ? (setupNow.dir === "long" ? "rgba(16,185,129,.15)" : "rgba(239,68,68,.15)") : "#1e293b", border: `2px solid ${setupNow?.valid ? (setupNow.dir === "long" ? "#10b981" : "#ef4444") : "#334155"}`, borderRadius: 10, padding: "12px 18px", textAlign: "center" }}>
+                    <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Status Now</p>
+                    <p style={{ fontSize: 14, fontWeight: 800, color: setupNow?.valid ? (setupNow.dir === "long" ? "#10b981" : "#ef4444") : "#64748b", marginTop: 6 }}>
+                      {setupNow?.valid ? `WATCHING 4H FOR ${setupNow.dir.toUpperCase()} SIGNAL` : "NO SETUP — not watching"}
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -840,16 +979,49 @@ export default function BacktestLoopPage() {
           <>
             <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
               <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
-              <p style={{ fontSize: 15, fontWeight: 700, color: "#06b6d4" }}>Step 6: Requirements</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#f59e0b" }}>Step 6: Trade Requirements</p>
             </div>
             <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
-              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Qualified Days</p>
-              <p className="num" style={{ fontSize: 16, fontWeight: 800 }}>{requirementsHist.filter(p => p.eligible).length} / {requirementsHist.length}</p>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Checklist Now</p>
+              <p style={{ fontSize: 16, fontWeight: 800 }}>
+                {setupNow ? ([setupNow.c1, setupNow.c2, setupNow.c3, setupNow.c4] as const).map((ok, i) => (
+                  <span key={i} style={{ color: ok ? "var(--teal)" : "var(--red)" }}>{ok ? "✓" : "✗"}</span>
+                )) : "—"}
+              </p>
             </div>
             <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
-              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Verdict Now</p>
-              <p style={{ fontSize: 16, fontWeight: 800, color: requirementsNow?.eligible ? (requirementsNow.dir === "long" ? "var(--teal)" : "var(--red)") : "var(--muted)" }}>
-                {requirementsNow?.eligible ? `${requirementsNow.dir.toUpperCase()} SETUP` : "WAIT"}
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Verdict</p>
+              <p style={{ fontSize: 15, fontWeight: 800, color: setupNow?.valid ? (setupNow.dir === "long" ? "var(--teal)" : "var(--red)") : "var(--muted)" }}>
+                {setupNow?.valid ? `SETUP ${setupNow.dir.toUpperCase()}` : "NO SETUP"}
+              </p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Valid Days</p>
+              <p style={{ fontSize: 16, fontWeight: 800 }}>
+                <span style={{ color: "var(--teal)" }}>{setupHist.filter(p => p.valid && p.dir === "long").length}↑</span>
+                {" · "}
+                <span style={{ color: "var(--red)" }}>{setupHist.filter(p => p.valid && p.dir === "short").length}↓</span>
+              </p>
+            </div>
+          </>
+        ) : activeStep === 7 ? (
+          <>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#3b82f6" }}>Step 7: Entry Signal</p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Signals</p>
+              <p style={{ fontSize: 16, fontWeight: 800 }}>
+                <span style={{ color: "var(--teal)" }}>{entrySigs.filter(s => s.dir === "long").length}↑</span>
+                {" · "}
+                <span style={{ color: "var(--red)" }}>{entrySigs.filter(s => s.dir === "short").length}↓</span>
+              </p>
+            </div>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Status</p>
+              <p style={{ fontSize: 15, fontWeight: 800, color: setupNow?.valid ? (setupNow.dir === "long" ? "var(--teal)" : "var(--red)") : "var(--muted)" }}>
+                {setupNow?.valid ? `WATCHING ${setupNow.dir.toUpperCase()}` : "NOT WATCHING"}
               </p>
             </div>
           </>
@@ -875,59 +1047,20 @@ export default function BacktestLoopPage() {
 
         <div style={{ marginLeft: "auto", padding: "14px 18px", display: "flex", gap: 14, alignItems: "center" }}>
           {activeStep === 1 ? (
-            <>
-              {[{ c: "#10b981", l: "HH / HL (bullish)" }, { c: "#f97316", l: "LH" }, { c: "#ef4444", l: "LL (bearish)" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "HH / HL (bullish)" }, { c: "#f97316", l: "LH" }, { c: "#ef4444", l: "LL (bearish)" }], "dot")}</>
           ) : activeStep === 2 ? (
-            <>
-              {[{ c: "#10b981", l: "Bullish structure" }, { c: "#ef4444", l: "Bearish structure" }, { c: "#64748b", l: "Neutral" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "Bullish structure" }, { c: "#ef4444", l: "Bearish structure" }, { c: "#64748b", l: "Neutral" }])}</>
           ) : activeStep === 3 ? (
-            <>
-              {[{ c: "#10b981", l: "50 EMA — longs only" }, { c: "#ef4444", l: "50 EMA — shorts only" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "50 EMA — longs only" }, { c: "#ef4444", l: "50 EMA — shorts only" }])}</>
           ) : activeStep === 4 ? (
-            <>
-              {[{ c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([
+              { c: "#10b981", l: "Long allowed" }, { c: "#ef4444", l: "Short allowed" }, { c: "#64748b", l: "No trade" },
+              { c: "#a855f7", l: "W 50 EMA" }, { c: "#f59e0b", l: "D 50 EMA" }, { c: "#06b6d4", l: "4H 50 EMA" },
+            ])}</>
           ) : activeStep === 5 ? (
-            <>
-              {[{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
-          ) : activeStep === 6 ? (
-            <>
-              {[{ c: "#10b981", l: "Eligible long setup" }, { c: "#ef4444", l: "Eligible short setup" }, { c: "#64748b", l: "Requirements not met" }].map(x => (
-                <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 16, height: 4, borderRadius: 2, background: x.c }} />
-                  <span style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>{x.l}</span>
-                </div>
-              ))}
-            </>
+            <>{legendChips([{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }])}</>
+          ) : activeStep === 6 || activeStep === 7 ? (
+            <>{legendChips([{ c: "#10b981", l: "Setup valid (long)" }, { c: "#ef4444", l: "Setup valid (short)" }, { c: "#64748b", l: "No setup" }])}</>
           ) : (
             <>
               {[{ c: "var(--teal)", l: "Long" }, { c: "var(--red)", l: "Short" }, { c: "var(--blue)", l: "TP" }, { c: "var(--yellow)", l: "SL" }].map(x => (
@@ -949,7 +1082,14 @@ export default function BacktestLoopPage() {
           </div>
         )}
         {candles.length > 0 ? (
-          <CandleChart candles={candles} signals={markers} regimeLine={regimeLine} height={480}
+          <CandleChart candles={candles} signals={markers} regimeLine={regimeLine}
+            regimeTitle={activeStep === 3 ? "50 EMA" : undefined}
+            extraLines={activeStep === 4 ? [
+              { label: "W 50 EMA",  color: "#a855f7", points: emaWeekly },
+              { label: "D 50 EMA",  color: "#f59e0b", points: emaData.map(p => ({ time: p.time, value: p.value })) },
+              { label: "4H 50 EMA", color: "#06b6d4", points: emaH4, dashed: true },
+            ].filter(l => !hidden.has(l.label)) : undefined}
+            height={480}
             highlightTrade={highlightTrade} tradeRanges={tradeRanges} onTradeClick={selectTrade} />
         ) : (
           <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10 }}>

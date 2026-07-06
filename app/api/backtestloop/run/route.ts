@@ -3,75 +3,161 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic   = "force-dynamic";
 export const maxDuration = 60;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Market Structure Bot — full strategy backtest (steps 1-8)
+//
+// 1. Swings from candle colour flips (HH/HL/LH/LL, 5% zigzag filter)
+// 2. Structure state machine: close above LH = bullish, below HL = bearish
+// 3. Daily 50 EMA decides direction (above = longs only, below = shorts only)
+// 4. HTF confirmation: (Weekly AND Daily) OR (Daily AND 4H) aligned
+// 5. Score W/D/4H 0-60 on 7 criteria
+// 6. Requirements: EMA dir + HTF aligned + 2 of 3 TFs >= 45 + total >= 120
+// 7. Entry on 4H: Shift of Structure or engulfing candle
+// 8. Risk: 1% per trade · SL just beyond the HL/LH · TP at 1:3
+// ═══════════════════════════════════════════════════════════════════════════
 
 interface RawCandle { t: number; o: string; h: string; l: string; c: string; v: string; }
 interface Bar { time: number; open: number; high: number; low: number; close: number; volume: number; }
+type Trend = "bullish" | "bearish" | "neutral";
 
-interface Swing { type: "high" | "low"; price: number; idx: number; }
-
-interface StructureState {
-  trend: "bullish" | "bearish" | "neutral";
-  activeHL: number;  // most recent swing low  → SL for longs
-  activeLH: number;  // most recent swing high → SL for shorts
-}
-
-interface Trade {
-  direction: "long" | "short";
-  entryTime: number; exitTime: number;
-  entryPrice: number; exitPrice: number;
-  slPrice: number; tpPrice: number;
-  pnl: number; size: number; slDist: number;
-  trailedToBreakeven: boolean; extremePrice: number;
-  exitReason: "tp" | "sl" | "be" | "eod";
-  entryReason: string; analysis: string;
-  entryIdx: number;
-}
-
-// ─── Bar Fetching ─────────────────────────────────────────────────────────────
-
-const HL = "https://api.hyperliquid.xyz/info";
-const INTERVAL_MS: Record<string, number> = { "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000 };
+const HL_API = "https://api.hyperliquid.xyz/info";
 const YAHOO_SYMBOLS: Record<string, string> = {
   GOLD: "GC=F", XAUUSD: "GC=F", SPX: "^GSPC", SP500: "^GSPC", "S&P500": "^GSPC",
 };
 
-async function fetchYahoo(sym: string, count: number): Promise<Bar[]> {
+// ─── Data fetching ────────────────────────────────────────────────────────────
+
+async function fetchYahoo(sym: string, interval: string, days: number): Promise<Bar[]> {
   const end   = Math.floor(Date.now() / 1000);
-  const start = end - (count + 250) * 86400;
-  const url   = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&period1=${start}&period2=${end}`;
+  const start = end - days * 86400;
+  const url   = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${interval}&period1=${start}&period2=${end}`;
   const res   = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
   if (!res.ok) throw new Error(`yahoo ${res.status}`);
   const j = await res.json();
   const result = j?.chart?.result?.[0];
-  if (!result) throw new Error("yahoo: no result");
-  const timestamps: number[] = result.timestamp;
+  if (!result?.timestamp) throw new Error("yahoo: no result");
   const q = result.indicators.quote[0];
-  return timestamps.map((t, i) => ({
-    time: t * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] ?? 0,
-  })).filter(b => b.close != null && !isNaN(b.close)).sort((a, b) => a.time - b.time);
+  return result.timestamp
+    .map((t: number, i: number) => ({ time: t * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] ?? 0 }))
+    .filter((b: Bar) => b.close != null && !isNaN(b.close))
+    .sort((a: Bar, b: Bar) => a.time - b.time);
 }
 
-async function fetchBars(symbol: string, interval: string, count: number): Promise<Bar[]> {
-  const yahooSym = YAHOO_SYMBOLS[symbol.toUpperCase()];
-  if (yahooSym) return await fetchYahoo(yahooSym, count);
-  const ms    = INTERVAL_MS[interval] ?? INTERVAL_MS["1d"];
+async function fetchHL(symbol: string, interval: string, days: number): Promise<Bar[]> {
   const end   = Date.now();
-  const start = end - count * ms;
-  const resp  = await fetch(HL, {
+  const start = end - days * 86_400_000;
+  const resp  = await fetch(HL_API, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "candleSnapshot", req: { coin: symbol, interval, startTime: start, endTime: end } }),
   });
   const raw: RawCandle[] = await resp.json();
+  if (!Array.isArray(raw)) throw new Error("hyperliquid: bad response");
   return raw.map(c => ({ time: c.t, open: +c.o, high: +c.h, low: +c.l, close: +c.c, volume: +c.v }))
             .sort((a, b) => a.time - b.time);
 }
 
-// ─── Indicators ───────────────────────────────────────────────────────────────
+async function fetchDaily(symbol: string, days: number): Promise<Bar[]> {
+  const y = YAHOO_SYMBOLS[symbol.toUpperCase()];
+  return y ? fetchYahoo(y, "1d", days) : fetchHL(symbol, "1d", days);
+}
 
-function ema(bars: Bar[], period: number): number[] {
-  const k = 2 / (period + 1);
+async function fetch4h(symbol: string, days: number): Promise<Bar[]> {
+  const y = YAHOO_SYMBOLS[symbol.toUpperCase()];
+  if (!y) return fetchHL(symbol, "4h", days);
+  // Yahoo: 1h history capped ~730d, aggregate into 4H buckets
+  const hourly = await fetchYahoo(y, "60m", Math.min(days, 720));
+  const bucket = (t: number) => Math.floor(t / 14_400_000);
+  const h4: Bar[] = [];
+  for (const b of hourly) {
+    const last = h4[h4.length - 1];
+    if (last && bucket(last.time) === bucket(b.time)) {
+      last.high = Math.max(last.high, b.high);
+      last.low  = Math.min(last.low, b.low);
+      last.close = b.close;
+      last.volume += b.volume;
+    } else {
+      h4.push({ ...b, time: bucket(b.time) * 14_400_000 });
+    }
+  }
+  return h4;
+}
+
+// ─── Step 1: swings ───────────────────────────────────────────────────────────
+
+interface Swing { type: "high" | "low"; price: number; barIdx: number; }
+
+function detectSwings(bars: Bar[], minMove = 0.05): Swing[] {
+  const isG = (b: Bar) => b.close >= b.open;
+  const isR = (b: Bar) => b.close  < b.open;
+  const raw: Swing[] = [];
+  for (let i = 1; i < bars.length; i++) {
+    if (isR(bars[i]) && isG(bars[i - 1])) {
+      let p = bars[i - 1].high, j = i - 2;
+      while (j >= 0 && isG(bars[j])) { if (bars[j].high > p) p = bars[j].high; j--; }
+      raw.push({ type: "high", price: p, barIdx: i - 1 });
+    }
+    if (isG(bars[i]) && isR(bars[i - 1])) {
+      let p = bars[i - 1].low, j = i - 2;
+      while (j >= 0 && isR(bars[j])) { if (bars[j].low < p) p = bars[j].low; j--; }
+      raw.push({ type: "low", price: p, barIdx: i - 1 });
+    }
+  }
+  const dedup: Swing[] = [];
+  for (const s of raw) {
+    const l = dedup[dedup.length - 1];
+    if (l && l.type === s.type) {
+      if (s.type === "high" && s.price > l.price) dedup[dedup.length - 1] = s;
+      else if (s.type === "low" && s.price < l.price) dedup[dedup.length - 1] = s;
+    } else dedup.push(s);
+  }
+  const major: Swing[] = [];
+  for (const s of dedup) {
+    if (!major.length) { major.push(s); continue; }
+    const last = major[major.length - 1];
+    if (last.type === s.type) {
+      if (s.type === "high" && s.price > last.price) major[major.length - 1] = s;
+      else if (s.type === "low" && s.price < last.price) major[major.length - 1] = s;
+      continue;
+    }
+    if (Math.abs(s.price - last.price) / last.price >= minMove) major.push(s);
+    else {
+      const ps = major[major.length - 2];
+      if (ps && ps.type === s.type) {
+        if (s.type === "high" && s.price > ps.price) major.splice(major.length - 2, 2, s);
+        else if (s.type === "low" && s.price < ps.price) major.splice(major.length - 2, 2, s);
+      }
+    }
+  }
+  return major;
+}
+
+// ─── Step 2: structure state machine (also records active HL/LH per bar) ─────
+
+function computeStructure(bars: Bar[], swings: Swing[]) {
+  let trend: Trend = "neutral";
+  let activeHigh: number | null = null;   // last confirmed swing high (LH)
+  let activeLow:  number | null = null;   // last confirmed swing low  (HL)
+  let sw = 0;
+  const regime: { time: number; trend: Trend; activeHL: number | null; activeLH: number | null }[] = [];
+  for (let i = 0; i < bars.length; i++) {
+    while (sw < swings.length && swings[sw].barIdx + 1 <= i) {
+      const s = swings[sw];
+      if (s.type === "high") activeHigh = s.price; else activeLow = s.price;
+      sw++;
+    }
+    const c = bars[i].close;
+    if (trend !== "bullish" && activeHigh !== null && c > activeHigh) trend = "bullish";
+    else if (trend !== "bearish" && activeLow !== null && c < activeLow) trend = "bearish";
+    regime.push({ time: bars[i].time, trend, activeHL: activeLow, activeLH: activeHigh });
+  }
+  return regime;
+}
+
+// ─── Step 3: 50 EMA ───────────────────────────────────────────────────────────
+
+function ema50(bars: Bar[]): number[] {
+  const k = 2 / 51;
   const out: number[] = [];
   for (let i = 0; i < bars.length; i++) {
     out.push(i === 0 ? bars[0].close : bars[i].close * k + out[i - 1] * (1 - k));
@@ -79,413 +165,136 @@ function ema(bars: Bar[], period: number): number[] {
   return out;
 }
 
-function atr(bars: Bar[], idx: number, n = 14): number {
-  let sum = 0, count = 0;
-  for (let i = Math.max(1, idx - n + 1); i <= idx; i++) {
-    const tr = Math.max(
-      bars[i].high - bars[i].low,
-      Math.abs(bars[i].high - bars[i - 1].close),
-      Math.abs(bars[i].low  - bars[i - 1].close),
-    );
-    sum += tr; count++;
-  }
-  return count > 0 ? sum / count : bars[idx].high - bars[idx].low;
-}
-
-// ─── Weekly bars (group daily → 1 bar per ISO week) ──────────────────────────
-
 function toWeeklyBars(daily: Bar[]): Bar[] {
+  const wk = (t: number) => Math.floor((t / 86_400_000 + 3) / 7);
   const weekly: Bar[] = [];
-  let i = 0;
-  while (i < daily.length) {
-    const chunk: Bar[] = [];
-    // Consume bars until the day-of-week wraps back to Monday (UTCDay=1)
-    // or we run out of bars.
-    const startDow = new Date(daily[i].time).getUTCDay();
-    chunk.push(daily[i++]);
-    while (i < daily.length) {
-      const dow = new Date(daily[i].time).getUTCDay();
-      if (dow === 1 && chunk.length >= 2) break; // new week starts on Monday
-      chunk.push(daily[i++]);
-    }
-    weekly.push({
-      time: chunk[0].time,
-      open: chunk[0].open,
-      high: Math.max(...chunk.map(b => b.high)),
-      low:  Math.min(...chunk.map(b => b.low)),
-      close: chunk[chunk.length - 1].close,
-      volume: chunk.reduce((s, b) => s + b.volume, 0),
-    });
-    void startDow;
+  for (const b of daily) {
+    const last = weekly[weekly.length - 1];
+    if (last && wk(last.time) === wk(b.time)) {
+      last.high = Math.max(last.high, b.high);
+      last.low  = Math.min(last.low, b.low);
+      last.close = b.close;
+      last.volume += b.volume;
+    } else weekly.push({ ...b });
   }
   return weekly;
 }
 
-// ─── Swing Detection ─────────────────────────────────────────────────────────
-// Swing High: ≥1 green candles then a red candle → peak before the red = SH
-// Swing Low : ≥1 red   candles then a green candle → trough before green = SL
-// Swings are confirmed on the bar AFTER the swing bar (1-bar lag — no look-ahead).
+// ─── Step 5: scoring ─────────────────────────────────────────────────────────
 
-function detectSwings(bars: Bar[]): Swing[] {
-  const isGreen = (b: Bar) => b.close >= b.open;
-  const isRed   = (b: Bar) => b.close  < b.open;
-  const raw: Swing[] = [];
+function scoreTimeframe(bars: Bar[], idx: number, dir: "long" | "short", emaArr: number[], swings: Swing[], trendAtIdx: Trend, tol: number): number {
+  if (idx < 2 || !bars.length) return 0;
+  let total = 0;
+  const b = bars[idx], prev = bars[idx - 1], close = b.close;
+  const known  = swings.filter(s => s.barIdx + 1 <= idx);
+  const levels = known.slice(-10);
+  const kH = known.filter(s => s.type === "high");
+  const kL = known.filter(s => s.type === "low");
 
-  for (let i = 1; i < bars.length; i++) {
-    // Swing High
-    if (isRed(bars[i]) && isGreen(bars[i - 1])) {
-      let peak = bars[i - 1].high;
-      let j = i - 2;
-      while (j >= 0 && isGreen(bars[j])) { if (bars[j].high > peak) peak = bars[j].high; j--; }
-      raw.push({ type: "high", price: peak, idx: i - 1 });
-    }
-    // Swing Low
-    if (isGreen(bars[i]) && isRed(bars[i - 1])) {
-      let trough = bars[i - 1].low;
-      let j = i - 2;
-      while (j >= 0 && isRed(bars[j])) { if (bars[j].low < trough) trough = bars[j].low; j--; }
-      raw.push({ type: "low", price: trough, idx: i - 1 });
-    }
-  }
+  if ((dir === "long" && trendAtIdx === "bullish") || (dir === "short" && trendAtIdx === "bearish")) total += 10;
 
-  // Merge consecutive same-type swings: keep most extreme
-  const out: Swing[] = [];
-  for (const s of raw) {
-    const last = out[out.length - 1];
-    if (last && last.type === s.type) {
-      if (s.type === "high" && s.price > last.price) out[out.length - 1] = s;
-      else if (s.type === "low" && s.price < last.price) out[out.length - 1] = s;
-    } else {
-      out.push(s);
-    }
-  }
-  return out;
-}
+  const range = b.high - b.low;
+  const rej = range > 0 && (dir === "long" ? (close - b.low) / range >= 0.6 : (b.high - close) / range >= 0.6);
+  if (levels.some(s => Math.abs(s.price - close) / close < tol) && rej) total += 10;
 
-// ─── Market Structure State Machine ──────────────────────────────────────────
-// Bullish  = making Higher Highs + Higher Lows (HH + HL)
-// Bearish  = making Lower  Highs + Lower  Lows (LH + LL)
-// Override: close above last swing high = bullish break; below last swing low = bearish break
+  const ev = emaArr[Math.min(idx, emaArr.length - 1)];
+  if (b.low <= ev && ev <= b.high) total += 5;
 
-function computeStructure(swings: Swing[], currentClose: number): StructureState {
-  const highs = swings.filter(s => s.type === "high");
-  const lows  = swings.filter(s => s.type === "low");
+  const step = close >= 50_000 ? 5_000 : close >= 10_000 ? 1_000 : close >= 1_000 ? 100 : close >= 100 ? 10 : 1;
+  const rd = Math.round(close / step) * step;
+  if (b.low <= rd && rd <= b.high && (dir === "long" ? close > rd : close < rd)) total += 5;
 
-  if (highs.length < 2 || lows.length < 2) {
-    return { trend: "neutral", activeHL: 0, activeLH: Infinity };
-  }
+  if (dir === "long"  && kL.some(s => b.low  <= s.price && close > s.price)) total += 10;
+  if (dir === "short" && kH.some(s => b.high >= s.price && close < s.price)) total += 10;
 
-  const h1 = highs[highs.length - 2], h2 = highs[highs.length - 1];
-  const l1 = lows[lows.length - 2],   l2 = lows[lows.length - 1];
+  const bE = prev.close < prev.open && b.open <= prev.close && close > prev.open;
+  const sE = prev.close > prev.open && b.open >= prev.close && close < prev.open;
+  if (levels.some(s => Math.abs(s.price - close) / close < tol * 1.5) && (dir === "long" ? bE : sE)) total += 10;
 
-  let trend: "bullish" | "bearish" | "neutral" = "neutral";
-  if (h2.price > h1.price && l2.price > l1.price) trend = "bullish"; // HH + HL
-  else if (h2.price < h1.price && l2.price < l1.price) trend = "bearish"; // LH + LL
-  // State-machine override: close breaks last key level
-  else if (currentClose > h2.price) trend = "bullish";
-  else if (currentClose < l2.price) trend = "bearish";
-
-  return {
-    trend,
-    activeHL: l2.price,  // most recent swing low (long SL below this)
-    activeLH: h2.price,  // most recent swing high (short SL above this)
-  };
-}
-
-// ─── Score a Timeframe (0–60 pts) ────────────────────────────────────────────
-// 1. Trend aligned           10
-// 2. AOI + rejection         10
-// 3. Touch of 50 EMA          5
-// 4. Psychological round #    5
-// 5. Rejection from structure 10
-// 6. Engulfing at structure   10
-// 7. H&S break               10
-
-function scoreTimeframe(
-  bars: Bar[],
-  idx: number,
-  direction: "long" | "short",
-  ema50arr: number[],
-  swings: Swing[],
-  structure: StructureState,
-): number {
-  if (idx < 5) return 0;
-  let score = 0;
-
-  const b     = bars[idx];
-  const close = b.close;
-  const open  = b.open;
-  const ema50 = ema50arr[Math.min(idx, ema50arr.length - 1)];
-  const recentSw = swings.filter(s => s.idx < idx && s.idx >= idx - 80);
-  const prevH    = recentSw.filter(s => s.type === "high");
-  const prevL    = recentSw.filter(s => s.type === "low");
-
-  // 1. Trend aligned
-  if ((direction === "long"  && structure.trend === "bullish") ||
-      (direction === "short" && structure.trend === "bearish")) score += 10;
-
-  // 2. AOI + rejection candle (body pointing trade direction, near key level)
-  const nearAOI = recentSw.some(s => Math.abs(s.price - close) / close < 0.025);
-  const bodyDir = direction === "long" ? close > open : close < open;
-  if (nearAOI && bodyDir) score += 10;
-
-  // 3. Touch of 50 EMA
-  if (Math.abs(close - ema50) / ema50 < 0.015) score += 5;
-
-  // 4. Psychological round number
-  const step = close > 50_000 ? 5_000 : close > 10_000 ? 1_000 : close > 1_000 ? 100 : 50;
-  const round = Math.round(close / step) * step;
-  if (Math.abs(close - round) / close < 0.005) score += 5;
-
-  // 5. Rejection from previous structure level
-  const strRejL = prevL.some(s => Math.abs(s.price - close) / close < 0.025);
-  const strRejH = prevH.some(s => Math.abs(s.price - close) / close < 0.025);
-  const strRej  = direction === "long" ? strRejL : strRejH;
-  if (strRej) score += 10;
-
-  // 6. Engulfing candle at structure
-  if (idx > 0) {
-    const prev = bars[idx - 1];
-    const bullEng = prev.close < prev.open && b.open < prev.close && close > prev.open;
-    const bearEng = prev.close > prev.open && b.open > prev.close && close < prev.open;
-    if (strRej && (direction === "long" ? bullEng : bearEng)) score += 10;
-  }
-
-  // 7. H&S break (bearish) or Inverted H&S break (bullish)
-  if (direction === "short" && prevH.length >= 3) {
-    const [ls, head, rs] = prevH.slice(-3);
-    if (head.price > ls.price && head.price > rs.price && rs.idx > ls.idx) {
-      const neck = Math.max(
-        Math.min(...bars.slice(ls.idx, head.idx + 1).map(x => x.low)),
-        Math.min(...bars.slice(head.idx, rs.idx + 1).map(x => x.low)),
-      );
-      if (close < neck * 1.005 && head.price - neck >= neck * 0.03) score += 10;
-    }
-  }
-  if (direction === "long" && prevL.length >= 3) {
-    const [ls, head, rs] = prevL.slice(-3);
-    if (head.price < ls.price && head.price < rs.price && rs.idx > ls.idx) {
-      const neck = Math.min(
-        Math.max(...bars.slice(ls.idx, head.idx + 1).map(x => x.high)),
-        Math.max(...bars.slice(head.idx, rs.idx + 1).map(x => x.high)),
-      );
-      if (close > neck * 0.995 && neck - head.price >= head.price * 0.03) score += 10;
-    }
-  }
-
-  return Math.min(score, 60);
-}
-
-// ─── Entry Signal: Bullish/Bearish Engulfing OR Shift of Structure ────────────
-
-function detectEntrySignal(bars: Bar[], idx: number, direction: "long" | "short", swings: Swing[]): boolean {
-  if (idx < 3) return false;
-  const prev = bars[idx - 1], curr = bars[idx];
-
-  // Engulfing
-  const bullEng = prev.close < prev.open && curr.open < prev.close && curr.close > prev.open;
-  const bearEng = prev.close > prev.open && curr.open > prev.close && curr.close < prev.open;
-  if (direction === "long"  && bullEng) return true;
-  if (direction === "short" && bearEng) return true;
-
-  // Shift of Structure: close breaks the most recent local swing in trade direction
-  // (after a pullback, first close above the last pullback swing high = SoS long)
-  const recent = swings.filter(s => s.idx >= idx - 10 && s.idx < idx);
-  if (direction === "long") {
-    const lastSH = recent.filter(s => s.type === "high").at(-1);
-    if (lastSH && curr.close > lastSH.price) return true;
-  } else {
-    const lastSL = recent.filter(s => s.type === "low").at(-1);
-    if (lastSL && curr.close < lastSL.price) return true;
-  }
-
-  return false;
-}
-
-// ─── Main Engine ──────────────────────────────────────────────────────────────
-
-function runEngine(bars: Bar[]) {
-  const RISK = 0.01;   // 1% risk per trade
-  const RR   = 3.0;    // 1:3 risk-reward
-  const CAP  = 10_000;
-
-  // Pre-compute daily indicators
-  const dailyEma50 = ema(bars, 50);
-  const dailySwings = detectSwings(bars);
-
-  // Pre-compute weekly bars + indicators
-  const weeklyBars   = toWeeklyBars(bars);
-  const weeklyEma50  = ema(weeklyBars, 50);
-  const weeklySwings = detectSwings(weeklyBars);
-
-  // Map each daily bar index → weekly bar index (which week does this day belong to)
-  const dailyToWeeklyIdx: number[] = bars.map(b => {
-    let wi = weeklyBars.findIndex((w, i) => {
-      const nextW = weeklyBars[i + 1];
-      return b.time >= w.time && (!nextW || b.time < nextW.time);
-    });
-    return Math.max(0, wi);
-  });
-
-  const trades: Trade[]   = [];
-  const signals: object[] = [];
-  let balance    = CAP;
-  let open: Trade | null  = null;
-  let slCooldown = 0;
-
-  for (let i = 60; i < bars.length - 1; i++) {
-    const bar = bars[i];
-    if (slCooldown > 0) slCooldown--;
-
-    // ── Exit management ─────────────────────────────────────────────────────
-    if (open) {
-      open.extremePrice = open.direction === "long"
-        ? Math.max(open.extremePrice, bar.high)
-        : Math.min(open.extremePrice, bar.low);
-      const favMove = open.direction === "long"
-        ? open.extremePrice - open.entryPrice
-        : open.entryPrice - open.extremePrice;
-
-      // Active trailing: once 1R in profit, trail at extremePrice ± 1.5×ATR14
-      if (favMove >= open.slDist) {
-        const barAtr = atr(bars, i, 14);
-        const trail  = open.direction === "long"
-          ? open.extremePrice - barAtr * 1.5
-          : open.extremePrice + barAtr * 1.5;
-        open.slPrice = open.direction === "long"
-          ? Math.max(open.slPrice, trail)
-          : Math.min(open.slPrice, trail);
-        open.trailedToBreakeven = true;
+  if (dir === "short" && kH.length >= 3) {
+    const [ls, hd, rs] = kH.slice(-3);
+    if (hd.price > ls.price && hd.price > rs.price) {
+      const lb = kL.filter(s => s.barIdx > ls.barIdx && s.barIdx < rs.barIdx);
+      if (lb.length) {
+        const nk = Math.max(...lb.map(s => s.price));
+        if (close < nk && b.high >= nk * (1 - tol)) total += 10;
       }
-
-      let closed = false;
-      if (open.direction === "long") {
-        if (bar.low  <= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
-        if (bar.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
-      } else {
-        if (bar.high >= open.slPrice) { open.exitPrice = open.slPrice; open.exitReason = open.trailedToBreakeven ? "be" : "sl"; closed = true; }
-        if (bar.low  <= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
-      }
-
-      if (closed) {
-        open.exitTime = bar.time;
-        open.pnl = (open.exitPrice - open.entryPrice) * (open.direction === "long" ? 1 : -1) * open.size;
-        balance += open.pnl;
-        const holdD = Math.round((open.exitTime - open.entryTime) / 86_400_000);
-        open.analysis = open.pnl > 0
-          ? `✅ ${holdD}d hold — ${open.exitReason === "tp" ? "TP hit (1:3)" : "trailing stop exit"}.`
-          : `❌ SL hit after ${holdD}d.`;
-        if (open.pnl < 0 && open.exitReason === "sl") slCooldown = 5;
-        signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : open.exitReason === "be" ? "Exit BE" : "Exit SL", price: open.exitPrice });
-        trades.push(open);
-        open = null;
-      }
-      continue;
     }
-
-    if (slCooldown > 0) continue;
-
-    // ── Step 3: Daily EMA 50 determines allowed direction ───────────────────
-    const closeAboveEma50 = bar.close > dailyEma50[i];
-    const dir: "long" | "short" = closeAboveEma50 ? "long" : "short";
-
-    // ── Compute Daily structure ──────────────────────────────────────────────
-    const dailySw   = dailySwings.filter(s => s.idx < i);
-    const dailySt   = computeStructure(dailySw, bar.close);
-
-    // ── Compute Weekly structure ─────────────────────────────────────────────
-    const wi        = dailyToWeeklyIdx[i];
-    const weeklySw  = weeklySwings.filter(s => s.idx <= wi);
-    const weeklySt  = computeStructure(weeklySw, weeklyBars[wi]?.close ?? bar.close);
-
-    // ── Compute 4H-proxy structure (last 30 daily bars) ──────────────────────
-    const startIdx4H = Math.max(0, i - 30);
-    const proxy4H    = bars.slice(startIdx4H, i + 1);
-    const swings4H   = detectSwings(proxy4H);
-    const ema4H      = ema(proxy4H, Math.min(20, proxy4H.length - 1));
-    const struct4H   = computeStructure(swings4H, bar.close);
-
-    // ── Step 4: Higher timeframe confirmation ────────────────────────────────
-    const weeklyAligned = dir === "long" ? weeklySt.trend === "bullish" : weeklySt.trend === "bearish";
-    const dailyAligned  = dir === "long" ? dailySt.trend === "bullish"  : dailySt.trend === "bearish";
-    const proxy4HAligned = dir === "long" ? struct4H.trend === "bullish" : struct4H.trend === "bearish";
-
-    // Accept: (Weekly + Daily aligned) OR (Daily + 4H aligned)
-    const htfOk = (weeklyAligned && dailyAligned) || (dailyAligned && proxy4HAligned);
-    if (!htfOk) continue;
-
-    // ── Step 5: Score each timeframe ─────────────────────────────────────────
-    const weeklyScore = scoreTimeframe(weeklyBars, wi, dir, weeklyEma50, weeklySw, weeklySt);
-    const dailyScore  = scoreTimeframe(bars, i, dir, dailyEma50, dailySw, dailySt);
-    const score4H     = scoreTimeframe(proxy4H, proxy4H.length - 1, dir, ema4H, swings4H, struct4H);
-
-    // ── Step 6: Trade requirements ────────────────────────────────────────────
-    const scores   = [weeklyScore, dailyScore, score4H];
-    const passing  = scores.filter(s => s >= 45).length;
-    const total    = scores.reduce((a, b) => a + b, 0);
-
-    if (passing < 2 || total < 120) continue;
-
-    // ── Step 7: Entry signal on current bar ───────────────────────────────────
-    if (!detectEntrySignal(bars, i, dir, dailySw)) continue;
-
-    // ── Build trade ──────────────────────────────────────────────────────────
-    const entryBar   = bars[i + 1];
-    const entryPrice = entryBar.open;
-    const entryTime  = entryBar.time;
-
-    // SL: just beyond the active HL (long) or LH (short)
-    let slPrice: number;
-    if (dir === "long") {
-      slPrice = dailySt.activeHL > 0 ? dailySt.activeHL * 0.995 : entryPrice - atr(bars, i) * 2;
-    } else {
-      slPrice = dailySt.activeLH < Infinity ? dailySt.activeLH * 1.005 : entryPrice + atr(bars, i) * 2;
+  }
+  if (dir === "long" && kL.length >= 3) {
+    const [ls, hd, rs] = kL.slice(-3);
+    if (hd.price < ls.price && hd.price < rs.price) {
+      const hb = kH.filter(s => s.barIdx > ls.barIdx && s.barIdx < rs.barIdx);
+      if (hb.length) {
+        const nk = Math.min(...hb.map(s => s.price));
+        if (close > nk && b.low <= nk * (1 + tol)) total += 10;
+      }
     }
-
-    const slDist = Math.abs(entryPrice - slPrice);
-    if (slDist <= 0 || slDist / entryPrice > 0.20) continue; // sanity check
-
-    const tpPrice = dir === "long"
-      ? entryPrice + slDist * RR
-      : entryPrice - slDist * RR;
-
-    const size = (balance * RISK) / slDist;
-    if (size <= 0) continue;
-
-    const scoreStr = `W:${weeklyScore} D:${dailyScore} 4H:${score4H} total:${total}`;
-    const stateStr = `W:${weeklySt.trend} D:${dailySt.trend}`;
-
-    open = {
-      direction: dir,
-      entryTime, exitTime: 0,
-      entryPrice, exitPrice: 0,
-      slPrice, tpPrice,
-      slDist, trailedToBreakeven: false, extremePrice: entryPrice,
-      exitReason: "eod",
-      entryReason: `${dir === "long" ? "📈 LONG" : "📉 SHORT"} · Scores ${scoreStr} · Structure ${stateStr} · SL @ $${slPrice.toFixed(0)} (${(slDist / entryPrice * 100).toFixed(1)}%) · TP 1:3`,
-      analysis: "",
-      entryIdx: i + 1,
-      pnl: 0, size,
-    };
-    signals.push({ timestamp: new Date(entryTime).toISOString(), direction: dir, type: "Entry", price: entryPrice });
   }
-
-  // Close any open trade at end of data
-  if (open) {
-    const last = bars[bars.length - 1];
-    open.exitTime  = last.time;
-    open.exitPrice = last.close;
-    open.exitReason = "eod";
-    open.pnl = (open.exitPrice - open.entryPrice) * (open.direction === "long" ? 1 : -1) * open.size;
-    open.analysis = "Still open at end of data.";
-    balance += open.pnl;
-    trades.push(open);
-  }
-
-  return { trades, signals };
+  return total;
 }
 
-// ─── Stats ────────────────────────────────────────────────────────────────────
+// Lookback: candle criteria count if they occurred recently (trader's reading)
+function scoreLB(bars: Bar[], idx: number, dir: "long" | "short", emaArr: number[], swings: Swing[], trendAtIdx: Trend, tol: number, lookback: number): number {
+  // take max total over window is wrong (criteria must aggregate); replicate the
+  // per-criterion max by scoring each bar and taking the component-wise best.
+  // scoreTimeframe returns a total, so aggregate per-criterion here instead:
+  let aoi = 0, emaT = 0, round = 0, structRej = 0, engulf = 0, hns = 0;
+  for (let j = Math.max(2, idx - lookback + 1); j <= idx; j++) {
+    const b = bars[j], prev = bars[j - 1], close = b.close;
+    const known  = swings.filter(s => s.barIdx + 1 <= j);
+    const levels = known.slice(-10);
+    const kH = known.filter(s => s.type === "high");
+    const kL = known.filter(s => s.type === "low");
+    const range = b.high - b.low;
+    const rej = range > 0 && (dir === "long" ? (close - b.low) / range >= 0.6 : (b.high - close) / range >= 0.6);
+    if (levels.some(s => Math.abs(s.price - close) / close < tol) && rej) aoi = 10;
+    const ev = emaArr[Math.min(j, emaArr.length - 1)];
+    if (b.low <= ev && ev <= b.high) emaT = 5;
+    const step = close >= 50_000 ? 5_000 : close >= 10_000 ? 1_000 : close >= 1_000 ? 100 : close >= 100 ? 10 : 1;
+    const rd = Math.round(close / step) * step;
+    if (b.low <= rd && rd <= b.high && (dir === "long" ? close > rd : close < rd)) round = 5;
+    if (dir === "long"  && kL.some(s => b.low  <= s.price && close > s.price)) structRej = 10;
+    if (dir === "short" && kH.some(s => b.high >= s.price && close < s.price)) structRej = 10;
+    const bE = prev.close < prev.open && b.open <= prev.close && close > prev.open;
+    const sE = prev.close > prev.open && b.open >= prev.close && close < prev.open;
+    if (levels.some(s => Math.abs(s.price - close) / close < tol * 1.5) && (dir === "long" ? bE : sE)) engulf = 10;
+    if (dir === "short" && kH.length >= 3) {
+      const [ls, hd, rs] = kH.slice(-3);
+      if (hd.price > ls.price && hd.price > rs.price) {
+        const lb = kL.filter(s => s.barIdx > ls.barIdx && s.barIdx < rs.barIdx);
+        if (lb.length) {
+          const nk = Math.max(...lb.map(s => s.price));
+          if (close < nk && b.high >= nk * (1 - tol)) hns = 10;
+        }
+      }
+    }
+    if (dir === "long" && kL.length >= 3) {
+      const [ls, hd, rs] = kL.slice(-3);
+      if (hd.price < ls.price && hd.price < rs.price) {
+        const hb = kH.filter(s => s.barIdx > ls.barIdx && s.barIdx < rs.barIdx);
+        if (hb.length) {
+          const nk = Math.min(...hb.map(s => s.price));
+          if (close > nk && b.low <= nk * (1 + tol)) hns = 10;
+        }
+      }
+    }
+  }
+  const trendPts = ((dir === "long" && trendAtIdx === "bullish") || (dir === "short" && trendAtIdx === "bearish")) ? 10 : 0;
+  return trendPts + aoi + emaT + round + structRej + engulf + hns;
+}
+
+// ─── Trade + stats types ─────────────────────────────────────────────────────
+
+interface Trade {
+  direction: "long" | "short";
+  entryTime: number; exitTime: number;
+  entryPrice: number; exitPrice: number;
+  slPrice: number; tpPrice: number;
+  pnl: number; size: number;
+  exitReason: "tp" | "sl" | "eod";
+  entryReason: string; analysis: string;
+}
 
 function stats(trades: Trade[]) {
   const wins   = trades.filter(t => t.pnl > 0);
@@ -515,13 +324,187 @@ function stats(trades: Trade[]) {
   };
 }
 
-// ─── POST Handler ─────────────────────────────────────────────────────────────
+// ─── The engine ──────────────────────────────────────────────────────────────
+
+function runEngine(daily: Bar[], h4: Bar[]) {
+  const RISK = 0.01;   // step 8: 1% of account per trade
+  const RR   = 3;      // step 8: take profit at 1:3
+  const CAP  = 10_000;
+
+  // Daily pipeline (steps 1-3)
+  const dSwings = detectSwings(daily, 0.05);
+  const dRegime = computeStructure(daily, dSwings);
+  const dEma    = ema50(daily);
+
+  // Weekly (step 4)
+  const weekly  = toWeeklyBars(daily);
+  const wSwings = detectSwings(weekly, 0.05);
+  const wRegime = computeStructure(weekly, wSwings);
+  const wEma    = ema50(weekly);
+
+  // 4H (steps 4, 5, 7)
+  const hSwings = h4.length ? detectSwings(h4, 0.02) : [];
+  const hRegime = h4.length ? computeStructure(h4, hSwings) : [];
+  const hEma    = h4.length ? ema50(h4) : [];
+
+  // Per daily bar: setup validity (steps 4-6) + SL levels
+  let wp = 0, hp = 0;
+  const setup: { time: number; dir: "long" | "short"; valid: boolean; scores: [number, number, number]; activeHL: number | null; activeLH: number | null }[] = [];
+  for (let i = 0; i < daily.length; i++) {
+    const b = daily[i];
+    while (wp + 1 < wRegime.length && wRegime[wp + 1].time <= b.time) wp++;
+    const dayEnd = b.time + 86_399_999;
+    if (hRegime.length) { while (hp + 1 < hRegime.length && hRegime[hp + 1].time <= dayEnd) hp++; }
+
+    const W = wRegime[wp]?.trend ?? "neutral";
+    const D = dRegime[i].trend;
+    const H: Trend = hRegime.length && hRegime[hp].time <= dayEnd ? hRegime[hp].trend : "neutral";
+
+    const dir: "long" | "short" = b.close > dEma[i] ? "long" : "short";
+
+    // step 4
+    const htfOk =
+      dir === "long"  ? (W === "bullish" && D === "bullish") || (D === "bullish" && H === "bullish")
+                      : (W === "bearish" && D === "bearish") || (D === "bearish" && H === "bearish");
+
+    // step 5
+    const dS = scoreLB(daily, i, dir, dEma, dSwings, D, 0.02, 5);
+    const wS = scoreLB(weekly, wp, dir, wEma, wSwings, W, 0.03, 3);
+    const hS = h4.length ? scoreLB(h4, hp, dir, hEma, hSwings, H, 0.01, 18) : 0;
+    const total   = wS + dS + hS;
+    const passing = [wS, dS, hS].filter(s => s >= 45).length;
+
+    // step 6
+    const valid = htfOk && passing >= 2 && total >= 120;
+
+    setup.push({ time: b.time, dir, valid, scores: [wS, dS, hS], activeHL: dRegime[i].activeHL, activeLH: dRegime[i].activeLH });
+  }
+
+  // Entry timeframe: 4H if available, otherwise daily (fallback)
+  const eBars   = h4.length ? h4 : daily;
+  const eSwings = h4.length ? hSwings : dSwings;
+
+  const trades: Trade[]   = [];
+  const signals: { timestamp: string; direction: "long" | "short"; type: string; price: number }[] = [];
+  let balance = CAP;
+  let open: Trade | null = null;
+
+  let dp = 0, swp = 0;
+  let lastH: Swing | null = null, lastL: Swing | null = null;
+
+  for (let j = 1; j < eBars.length; j++) {
+    const b = eBars[j];
+
+    // ── manage open trade: SL checked first (conservative) ──────────────────
+    if (open) {
+      let closed = false;
+      if (open.direction === "long") {
+        if (b.low <= open.slPrice)       { open.exitPrice = open.slPrice; open.exitReason = "sl"; closed = true; }
+        else if (b.high >= open.tpPrice) { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
+      } else {
+        if (b.high >= open.slPrice)      { open.exitPrice = open.slPrice; open.exitReason = "sl"; closed = true; }
+        else if (b.low <= open.tpPrice)  { open.exitPrice = open.tpPrice; open.exitReason = "tp"; closed = true; }
+      }
+      if (closed) {
+        open.exitTime = b.time;
+        open.pnl = (open.exitPrice - open.entryPrice) * (open.direction === "long" ? 1 : -1) * open.size;
+        balance += open.pnl;
+        const holdD = Math.max(1, Math.round((open.exitTime - open.entryTime) / 86_400_000));
+        open.analysis = open.pnl > 0
+          ? `✅ TP hit at 1:3 after ${holdD}d — structure played out.`
+          : `❌ SL hit after ${holdD}d — stopped just beyond the ${open.direction === "long" ? "Higher Low" : "Lower High"}.`;
+        signals.push({ timestamp: new Date(open.exitTime).toISOString(), direction: open.direction, type: open.exitReason === "tp" ? "Exit TP" : "Exit SL", price: open.exitPrice });
+        trades.push(open);
+        open = null;
+      }
+      continue;
+    }
+
+    // ── setup as of the last COMPLETED daily bar ─────────────────────────────
+    while (dp + 1 < setup.length && setup[dp + 1].time + 86_400_000 <= b.time) dp++;
+    while (swp < eSwings.length && eSwings[swp].barIdx + 1 <= j) {
+      const s = eSwings[swp];
+      if (s.type === "high") lastH = s; else lastL = s;
+      swp++;
+    }
+    const st = setup[dp];
+    if (!st?.valid) continue;
+    const dir = st.dir;
+
+    // ── step 7: entry signal — SoS or engulfing ─────────────────────────────
+    const prev = eBars[j - 1];
+    const bullEng = prev.close < prev.open && b.open <= prev.close && b.close > prev.open;
+    const bearEng = prev.close > prev.open && b.open >= prev.close && b.close < prev.open;
+    let kind: "SoS" | "Engulfing" | null = null;
+    if (dir === "long") {
+      if (lastH && prev.close <= lastH.price && b.close > lastH.price) kind = "SoS";
+      else if (bullEng) kind = "Engulfing";
+    } else {
+      if (lastL && prev.close >= lastL.price && b.close < lastL.price) kind = "SoS";
+      else if (bearEng) kind = "Engulfing";
+    }
+    if (!kind || j + 1 >= eBars.length) continue;
+
+    // ── step 8: risk management ──────────────────────────────────────────────
+    const entryBar   = eBars[j + 1];
+    const entryPrice = entryBar.open;
+
+    // SL just beyond the daily Higher Low (long) / Lower High (short)
+    let slPrice: number;
+    if (dir === "long") {
+      if (st.activeHL == null) continue;
+      slPrice = st.activeHL * 0.999;
+      if (slPrice >= entryPrice) continue;
+    } else {
+      if (st.activeLH == null) continue;
+      slPrice = st.activeLH * 1.001;
+      if (slPrice <= entryPrice) continue;
+    }
+    const slDist = Math.abs(entryPrice - slPrice);
+    if (slDist <= 0 || slDist / entryPrice > 0.25) continue; // sanity cap
+
+    const tpPrice = dir === "long" ? entryPrice + slDist * RR : entryPrice - slDist * RR;
+    const size = (balance * RISK) / slDist;   // position size auto-adjusts to SL distance
+    if (size <= 0) continue;
+
+    const [wS, dS2, hS] = st.scores;
+    open = {
+      direction: dir,
+      entryTime: entryBar.time, exitTime: 0,
+      entryPrice, exitPrice: 0,
+      slPrice, tpPrice,
+      pnl: 0, size,
+      exitReason: "eod",
+      entryReason: `${dir === "long" ? "📈 LONG" : "📉 SHORT"} · ${kind} on ${h4.length ? "4H" : "1D"} · Scores W${wS} D${dS2} 4H${hS} (${wS + dS2 + hS}/180) · SL ${dir === "long" ? "below HL" : "above LH"} (${(slDist / entryPrice * 100).toFixed(1)}%) · TP 1:3`,
+      analysis: "",
+    };
+    signals.push({ timestamp: new Date(entryBar.time).toISOString(), direction: dir, type: "Entry", price: entryPrice });
+  }
+
+  if (open) {
+    const last = eBars[eBars.length - 1];
+    open.exitTime = last.time;
+    open.exitPrice = last.close;
+    open.exitReason = "eod";
+    open.pnl = (open.exitPrice - open.entryPrice) * (open.direction === "long" ? 1 : -1) * open.size;
+    open.analysis = "Still open at end of data.";
+    balance += open.pnl;
+    trades.push(open);
+  }
+
+  return { trades, signals };
+}
+
+// ─── POST ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
-    const { symbol = "BTC", limit = 730, interval = "1d" } = await req.json();
-    const bars = await fetchBars(symbol, interval, limit + 200);
-    const { trades, signals } = runEngine(bars);
+    const { symbol = "BTC", limit = 365 } = await req.json();
+    const daily = await fetchDaily(symbol, limit);
+    let h4: Bar[] = [];
+    try { h4 = await fetch4h(symbol, Math.min(limit, 700)); } catch { h4 = []; }
+
+    const { trades, signals } = runEngine(daily, h4);
     return NextResponse.json({
       ...stats(trades), signals,
       trades: trades.map(t => ({

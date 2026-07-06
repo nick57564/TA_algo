@@ -464,7 +464,7 @@ export async function POST(req: NextRequest) {
     let wp = 0, hp = 0;
     const htf: { time: number; close: number; weekly: Trend; daily: Trend; h4: Trend; allowed: "long" | "short" | "none" }[] = [];
     const scoreHistory: { time: number; close: number; w: number; d: number; h: number; total: number; pass: boolean; dir: "long" | "short" }[] = [];
-    const requirementsHistory: { time: number; close: number; dir: "long" | "short"; htfPass: boolean; timeframePasses: number; total: number; scorePass: boolean; eligible: boolean }[] = [];
+    const setupHistory: { time: number; close: number; dir: "long" | "short"; c1: boolean; c2: boolean; c3: boolean; c4: boolean; valid: boolean }[] = [];
 
     for (let i = 0; i < bars.length; i++) {
       const b = bars[i];
@@ -494,21 +494,55 @@ export async function POST(req: NextRequest) {
       const scores  = [wScore, dScore, hScore];
       const total   = wScore + dScore + hScore;
       const passing = scores.filter(s => s >= 45).length;
-      const scorePass = passing >= 2 && total >= 120;
-      const htfPass = allowed === dir;
-      scoreHistory.push({ time: b.time, close: b.close, w: wScore, d: dScore, h: hScore, total, pass: scorePass, dir });
-      requirementsHistory.push({
-        time: b.time,
-        close: b.close,
-        dir,
-        htfPass,
-        timeframePasses: passing,
-        total,
-        scorePass,
-        eligible: htfPass && scorePass,
-      });
+      scoreHistory.push({ time: b.time, close: b.close, w: wScore, d: dScore, h: hScore, total, pass: passing >= 2 && total >= 120, dir });
+
+      // Step 6: trade requirements — ALL must be true (entry signal is step 7)
+      const c1 = true;                    // EMA agrees: the EMA defines dir, so always true for dir
+      const c2 = allowed === dir;         // higher timeframes aligned in the SAME direction
+      const c3 = passing >= 2;            // at least 2 of 3 TFs score >= 45
+      const c4 = total >= 120;            // combined score >= 120
+      setupHistory.push({ time: b.time, close: b.close, dir, c1, c2, c3, c4, valid: c1 && c2 && c3 && c4 });
     }
     const htfNow = htf[htf.length - 1];
+
+    // ── Step 7: entry signals on the 4H chart ────────────────────────────────
+    // Only on days where the step 6 setup is VALID, the bot watches the 4H
+    // chart for either:
+    //   • Shift of Structure (SoS): a 4H close breaking the last confirmed
+    //     4H swing high (long) / swing low (short)
+    //   • Bullish/Bearish Engulfing candle in the trade direction
+    const entrySignals: { time: number; price: number; dir: "long" | "short"; kind: "SoS" | "Engulfing" }[] = [];
+    if (h4Bars.length) {
+      let dp = 0;   // last COMPLETED daily bar before the 4H bar
+      let swp = 0;
+      let lastH: { price: number } | null = null;
+      let lastL: { price: number } | null = null;
+      for (let j = 1; j < h4Bars.length; j++) {
+        const t = h4Bars[j].time;
+        while (dp + 1 < setupHistory.length && setupHistory[dp + 1].time + 86_400_000 <= t) dp++;
+        while (swp < h4Swings.length && h4Swings[swp].barIdx + 1 <= j) {
+          const s = h4Swings[swp];
+          if (s.type === "high") lastH = s; else lastL = s;
+          swp++;
+        }
+        const setup = setupHistory[dp];
+        if (!setup?.valid) continue;
+        const dir  = setup.dir;
+        const b    = h4Bars[j];
+        const prev = h4Bars[j - 1];
+        const bullEng = prev.close < prev.open && b.open <= prev.close && b.close > prev.open;
+        const bearEng = prev.close > prev.open && b.open >= prev.close && b.close < prev.open;
+        let kind: "SoS" | "Engulfing" | null = null;
+        if (dir === "long") {
+          if (lastH && prev.close <= lastH.price && b.close > lastH.price) kind = "SoS";
+          else if (bullEng) kind = "Engulfing";
+        } else {
+          if (lastL && prev.close >= lastL.price && b.close < lastL.price) kind = "SoS";
+          else if (bearEng) kind = "Engulfing";
+        }
+        if (kind) entrySignals.push({ time: t, price: b.close, dir, kind });
+      }
+    }
 
     // Step 5: full breakdown at the CURRENT bar for the panel
     const lastI   = bars.length - 1;
@@ -547,6 +581,9 @@ export async function POST(req: NextRequest) {
       allowed_direction: lastBar.close > emaArr[emaArr.length - 1] ? "long" : "short",
       // Step 4: higher timeframe confirmation
       htf,                                // per daily bar: weekly/daily/4H trend + allowed
+      // 50 EMA per higher timeframe, for display on the daily chart
+      ema50_weekly: weeklyBars.map((b, i) => ({ time: b.time, value: weeklyEma[i] })),
+      ema50_h4:     h4Bars.map((b, i) => ({ time: b.time, value: h4Ema[i] })),
       htf_now: {
         weekly:  htfNow?.weekly ?? "neutral",
         daily:   htfNow?.daily ?? "neutral",
@@ -557,10 +594,11 @@ export async function POST(req: NextRequest) {
       // Step 5: timeframe scoring
       score_now: scoreNow,                // full 7-criteria breakdown per TF at the current bar
       score_history: scoreHistory,        // per daily bar: w/d/h totals + pass (2×45 & 120 total)
-      // Step 6: all pre-entry requirements combined. Step 7 will look for an
-      // entry trigger only on bars where eligible is true.
-      requirements_now: requirementsNow,
-      requirements_history: requirementsHistory,
+      // Step 6: trade requirements checklist
+      setup_history: setupHistory,        // per daily bar: conditions 1-4 + valid flag
+      setup_now: setupHistory[setupHistory.length - 1] ?? null,
+      // Step 7: entry signals (SoS / engulfing on 4H, only when setup valid)
+      entry_signals: entrySignals,
     });
   } catch (e) {
     console.error(e);
