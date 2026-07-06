@@ -29,6 +29,7 @@ export interface SignalMarker {
   direction: "long" | "short";
   type: string;       // e.g. "Entry", "Exit TP", "Exit SL"
   price: number;
+  text?: string;      // optional compact chart label
 }
 
 export interface MAPoint { time: number; value: number; }
@@ -220,7 +221,7 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
           position: "aboveBar",
           color:    s.type === "HH" ? "#10b981" : "#f97316",
           shape:    "circle",
-          text:     s.type,
+          text:     s.text ?? s.type,
           size:     1,
         } as SeriesMarker<Time>;
 

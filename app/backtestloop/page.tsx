@@ -328,12 +328,25 @@ export default function BacktestLoopPage() {
     price:     e.price,
   }));
 
-  // Step 7: entry signal markers (SoS / engulfing on the 4H)
-  const entryMarkers: SignalMarker[] = entrySigs.map(s => ({
-    time:      s.time,
-    direction: s.dir,
-    type:      `${s.kind} Entry`,
-    price:     s.price,
+  // Step 7: group 4H signals by day and direction for the 1D chart. Printing
+  // every full label caused dense clusters to overlap and become unreadable.
+  const entryMarkerGroups = new Map<string, { time: number; price: number; dir: "long" | "short"; kinds: Set<"SoS" | "Engulfing"> }>();
+  for (const signal of entrySigs) {
+    const day = Math.floor(signal.time / 86_400_000);
+    const key = `${day}-${signal.dir}`;
+    const existing = entryMarkerGroups.get(key);
+    if (existing) {
+      existing.kinds.add(signal.kind);
+    } else {
+      entryMarkerGroups.set(key, { time: signal.time, price: signal.price, dir: signal.dir, kinds: new Set([signal.kind]) });
+    }
+  }
+  const entryMarkers: SignalMarker[] = Array.from(entryMarkerGroups.values()).map(group => ({
+    time: group.time,
+    direction: group.dir,
+    type: "Entry",
+    text: group.kinds.size === 2 ? "S+E" : group.kinds.has("SoS") ? "S" : "E",
+    price: group.price,
   }));
 
   const markers: SignalMarker[] =
@@ -819,6 +832,7 @@ export default function BacktestLoopPage() {
                 </div>
                 <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
                   Signals only fire on days where the <strong>step 6 setup is valid</strong> — all previous conditions must be met first. The arrows on the chart are the actual entry moments; the coloured line shows the setup-valid window.
+                  Chart labels are shortened to <strong>S</strong> and <strong>E</strong>; signals of both types on the same day are grouped as <strong>S+E</strong>.
                 </div>
               </div>
             </div>
@@ -1115,8 +1129,15 @@ export default function BacktestLoopPage() {
             ])}</>
           ) : activeStep === 5 ? (
             <>{legendChips([{ c: "#10b981", l: "Score pass (long)" }, { c: "#ef4444", l: "Score pass (short)" }, { c: "#64748b", l: "Below threshold" }])}</>
-          ) : activeStep === 6 || activeStep === 7 ? (
+          ) : activeStep === 6 ? (
             <>{legendChips([{ c: "#10b981", l: "Setup valid (long)" }, { c: "#ef4444", l: "Setup valid (short)" }, { c: "#64748b", l: "No setup" }])}</>
+          ) : activeStep === 7 ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "var(--muted)", fontWeight: 700 }}>
+              <span><strong style={{ color: "#3b82f6" }}>S</strong> Shift of Structure</span>
+              <span><strong style={{ color: "#a78bfa" }}>E</strong> Engulfing</span>
+              <span><strong style={{ color: "#10b981" }}>↑</strong> Long</span>
+              <span><strong style={{ color: "#ef4444" }}>↓</strong> Short</span>
+            </div>
           ) : (
             <>
               {[{ c: "var(--teal)", l: "Long" }, { c: "var(--red)", l: "Short" }, { c: "var(--blue)", l: "TP" }, { c: "var(--yellow)", l: "SL" }].map(x => (
