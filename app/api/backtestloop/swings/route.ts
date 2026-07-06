@@ -555,8 +555,6 @@ export async function POST(req: NextRequest) {
         ? scoreTimeframeLB(h4Bars, h4Bars.length - 1, dirNow, h4Ema, h4Swings, h4Regime[h4Regime.length - 1]?.trend ?? "neutral", 0.01, 18)
         : null,
     };
-    const requirementsNow = requirementsHistory[requirementsHistory.length - 1] ?? null;
-
     return NextResponse.json({
       symbol,
       total_bars: bars.length,

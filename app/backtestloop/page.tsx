@@ -20,6 +20,7 @@ const STEPS = [
   { id: 5, label: "TF Scoring", desc: "Weekly / Daily / 4H each scored 0-60 on 7 criteria" },
   { id: 6, label: "Trade Requirements", desc: "ALL must be true: EMA direction · HTF aligned · 2×45+ scores · 120+ total · entry signal" },
   { id: 7, label: "Entry Signal", desc: "SoS or engulfing on the 4H — only fires when the step 6 setup is valid" },
+  { id: 8, label: "Risk & Backtest", desc: "Risk 1% · SL beyond HL/LH · TP 1:3 · automatically run the full strategy" },
 ];
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -294,7 +295,7 @@ export default function BacktestLoopPage() {
     setResult(null); setRunErr(null);
   }, [symbol, limit]);
 
-  async function runBacktest() {
+  async function runBacktest(keepStep = false) {
     setRunning(true); setRunErr(null);
     try {
       const r = await fetch("/api/backtestloop/run", {
@@ -303,7 +304,7 @@ export default function BacktestLoopPage() {
       });
       const d = await r.json();
       if (d.error) setRunErr(d.error);
-      else { setResult(d); setTab("stats"); setActiveStep(null); }
+      else { setResult(d); setTab("stats"); if (!keepStep) setActiveStep(null); }
     } catch (e) { setRunErr(String(e)); }
     setRunning(false);
   }
@@ -409,7 +410,7 @@ export default function BacktestLoopPage() {
         </div>
 
         <div style={{ marginLeft: "auto" }}>
-          <button onClick={runBacktest} disabled={running} style={{
+          <button onClick={() => void runBacktest()} disabled={running} style={{
             padding: "12px 32px", borderRadius: 10, fontSize: 15, fontWeight: 700,
             cursor: running ? "not-allowed" : "pointer",
             background: running ? "var(--dim)" : "var(--teal)",
@@ -431,7 +432,14 @@ export default function BacktestLoopPage() {
         <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Build steps:</span>
           {STEPS.map(step => (
-            <button key={step.id} onClick={() => setActiveStep(activeStep === step.id ? null : step.id)} style={{
+            <button key={step.id} onClick={() => {
+              if (step.id === 8) {
+                setActiveStep(8);
+                void runBacktest(true);
+              } else {
+                setActiveStep(activeStep === step.id ? null : step.id);
+              }
+            }} style={{
               padding: "7px 16px", borderRadius: 8, fontSize: 14, fontWeight: 700,
               cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
               background: activeStep === step.id ? "#1e293b" : "#fff",
@@ -857,6 +865,37 @@ export default function BacktestLoopPage() {
             </div>
           </div>
         )}
+
+        {/* Step 8 info panel — selecting this step runs the complete backtest */}
+        {activeStep === 8 && (
+          <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "16px 20px", display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 300 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: "#f1f5f9", marginBottom: 8 }}>Step 8 — Risk Management & Full Backtest</p>
+              <p style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
+                Clicking Step 8 runs the complete Steps 1–8 strategy for the selected market and period. Trades are opened only after a valid Step 7 signal.
+              </p>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(145px, 1fr))", gap: 8, flex: 2 }}>
+              {[
+                { label: "Account risk", value: "1% per trade" },
+                { label: "Stop loss", value: "Beyond last HL / LH" },
+                { label: "Take profit", value: "1:3 risk–reward" },
+                { label: "Position size", value: "Automatic from SL" },
+              ].map(item => (
+                <div key={item.label} style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 9, padding: "11px 13px" }}>
+                  <p style={{ color: "#64748b", fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em" }}>{item.label}</p>
+                  <p style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 800, marginTop: 5 }}>{item.value}</p>
+                </div>
+              ))}
+            </div>
+            <div style={{ minWidth: 150, padding: "13px 16px", borderRadius: 9, textAlign: "center", background: running ? "rgba(59,130,246,.12)" : result ? "rgba(16,185,129,.12)" : "#1e293b", border: `1px solid ${running ? "rgba(59,130,246,.45)" : result ? "rgba(16,185,129,.4)" : "#334155"}` }}>
+              <p style={{ color: "#64748b", fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".07em" }}>Backtest</p>
+              <p style={{ color: running ? "#60a5fa" : result ? "#10b981" : "#94a3b8", fontSize: 14, fontWeight: 900, marginTop: 5 }}>
+                {running ? "RUNNING…" : result ? "COMPLETE ✓" : "READY"}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Chart info bar ── */}
@@ -1025,6 +1064,23 @@ export default function BacktestLoopPage() {
               </p>
             </div>
           </>
+        ) : activeStep === 8 ? (
+          <>
+            <div style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>Mode</p>
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#10b981" }}>Step 8: Full Backtest</p>
+            </div>
+            {[
+              { label: "Trades", value: result ? String(result.trades?.length ?? 0) : "—" },
+              { label: "Win Rate", value: result ? `${fmt(result.winrate_pct, 1)}%` : "—" },
+              { label: "Net P&L", value: result ? `$${fmt(result.net_pnl)}` : "—", color: result ? (result.net_pnl >= 0 ? "var(--teal)" : "var(--red)") : undefined },
+            ].map(item => (
+              <div key={item.label} style={{ padding: "14px 20px", borderRight: "1px solid var(--border)" }}>
+                <p style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 5 }}>{item.label}</p>
+                <p className="num" style={{ fontSize: 16, fontWeight: 800, color: item.color }}>{item.value}</p>
+              </div>
+            ))}
+          </>
         ) : (
           // Normal backtest stats
           <>
@@ -1105,7 +1161,7 @@ export default function BacktestLoopPage() {
       </div>
 
       {/* ── Backtest results ── */}
-      {result && activeStep === null && (
+      {result && (activeStep === null || activeStep === 8) && (
         <div className="slide-in">
           <div style={{ display: "flex", gap: 4, marginBottom: 14, background: "#fff", border: "1px solid var(--border)", borderRadius: 10, padding: 4, width: "fit-content" }}>
             {(["stats","trades"] as const).map(t => (
