@@ -193,10 +193,6 @@ interface EntrySignal {
   dir: "long" | "short";
   kind: "SoS" | "Engulfing";
   reason: string;
-  w: number; d: number; h: number; total: number;
-  weekly: "bullish" | "bearish" | "neutral";
-  daily: "bullish" | "bearish" | "neutral";
-  h4: "bullish" | "bearish" | "neutral";
 }
 
 export default function BacktestLoopPage() {
@@ -525,29 +521,18 @@ export default function BacktestLoopPage() {
 
             {!swingLoading && entrySigs.length > 0 && (
               <div style={{ width: "100%", borderTop: "1px solid #334155", paddingTop: 14 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
-                  <p style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 800 }}>Why each entry appeared</p>
-                  <p style={{ color: "#64748b", fontSize: 11 }}>Newest first · all five trade requirements passed</p>
-                </div>
+                <p style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 800, marginBottom: 9 }}>Entry list — why each entry appeared</p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 7, maxHeight: 340, overflowY: "auto", paddingRight: 4 }}>
                   {[...entrySigs].reverse().map((signal, i) => {
                     const sideColor = signal.dir === "long" ? "#10b981" : "#ef4444";
-                    const trendIcon = (trend: EntrySignal["weekly"]) => trend === "bullish" ? "▲" : trend === "bearish" ? "▼" : "—";
                     return (
-                      <div key={`${signal.time}-${signal.kind}-${i}`} style={{ display: "grid", gridTemplateColumns: "155px minmax(260px, 1fr) minmax(300px, 1.2fr)", gap: 14, alignItems: "center", background: "#1e293b", border: "1px solid #334155", borderLeft: `3px solid ${sideColor}`, borderRadius: 8, padding: "10px 12px" }}>
+                      <div key={`${signal.time}-${signal.kind}-${i}`} style={{ display: "grid", gridTemplateColumns: "175px 135px minmax(300px, 1fr)", gap: 14, alignItems: "center", background: "#1e293b", border: "1px solid #334155", borderLeft: `3px solid ${sideColor}`, borderRadius: 8, padding: "9px 12px" }}>
                         <div>
-                          <p style={{ color: sideColor, fontSize: 12, fontWeight: 900 }}>{signal.dir.toUpperCase()} · {signal.kind === "SoS" ? "SHIFT OF STRUCTURE" : "ENGULFING"}</p>
-                          <p style={{ color: "#94a3b8", fontSize: 11, marginTop: 3 }}>{new Date(signal.time).toLocaleString()} · ${signal.price.toLocaleString()}</p>
+                          <p style={{ color: "#f1f5f9", fontSize: 12, fontWeight: 800 }}>{new Date(signal.time).toLocaleString()}</p>
+                          <p style={{ color: "#64748b", fontSize: 11, marginTop: 2 }}>${signal.price.toLocaleString()}</p>
                         </div>
-                        <p style={{ color: "#cbd5e1", fontSize: 12, lineHeight: 1.45 }}>{signal.reason}</p>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                          <span style={{ color: "#10b981", background: "rgba(16,185,129,.1)", border: "1px solid rgba(16,185,129,.25)", borderRadius: 5, padding: "3px 7px", fontSize: 10, fontWeight: 800 }}>✓ EMA {signal.dir.toUpperCase()}</span>
-                          <span style={{ color: "#cbd5e1", background: "#0f172a", border: "1px solid #334155", borderRadius: 5, padding: "3px 7px", fontSize: 10, fontWeight: 800 }}>HTF {trendIcon(signal.weekly)}W {trendIcon(signal.daily)}D {trendIcon(signal.h4)}4H</span>
-                          <span style={{ color: signal.w >= 45 ? "#10b981" : "#94a3b8", background: "#0f172a", border: "1px solid #334155", borderRadius: 5, padding: "3px 7px", fontSize: 10, fontWeight: 800 }}>W {signal.w}/60</span>
-                          <span style={{ color: signal.d >= 45 ? "#10b981" : "#94a3b8", background: "#0f172a", border: "1px solid #334155", borderRadius: 5, padding: "3px 7px", fontSize: 10, fontWeight: 800 }}>D {signal.d}/60</span>
-                          <span style={{ color: signal.h >= 45 ? "#10b981" : "#94a3b8", background: "#0f172a", border: "1px solid #334155", borderRadius: 5, padding: "3px 7px", fontSize: 10, fontWeight: 800 }}>4H {signal.h}/60</span>
-                          <span style={{ color: "#10b981", background: "rgba(16,185,129,.1)", border: "1px solid rgba(16,185,129,.25)", borderRadius: 5, padding: "3px 7px", fontSize: 10, fontWeight: 900 }}>TOTAL {signal.total}/180 ✓</span>
-                        </div>
+                        <p style={{ color: sideColor, fontSize: 11, fontWeight: 900 }}>{signal.dir.toUpperCase()} · {signal.kind === "SoS" ? "SHIFT OF STRUCTURE" : "ENGULFING"}</p>
+                        <p style={{ color: "#cbd5e1", fontSize: 12, lineHeight: 1.4 }}>{signal.reason}</p>
                       </div>
                     );
                   })}

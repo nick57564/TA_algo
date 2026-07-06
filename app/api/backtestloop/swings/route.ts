@@ -513,8 +513,7 @@ export async function POST(req: NextRequest) {
     //   • Bullish/Bearish Engulfing candle in the trade direction
     const entrySignals: {
       time: number; price: number; dir: "long" | "short"; kind: "SoS" | "Engulfing";
-      reason: string; w: number; d: number; h: number; total: number;
-      weekly: Trend; daily: Trend; h4: Trend;
+      reason: string;
     }[] = [];
     if (h4Bars.length) {
       let dp = 0;   // last COMPLETED daily bar before the 4H bar
@@ -545,8 +544,6 @@ export async function POST(req: NextRequest) {
           else if (bearEng) kind = "Engulfing";
         }
         if (kind) {
-          const scores = scoreHistory[dp];
-          const trends = htf[dp];
           let reason: string;
           if (kind === "SoS") {
             const level = dir === "long" ? lastH!.price : lastL!.price;
@@ -560,8 +557,6 @@ export async function POST(req: NextRequest) {
           }
           entrySignals.push({
             time: t, price: b.close, dir, kind, reason,
-            w: scores.w, d: scores.d, h: scores.h, total: scores.total,
-            weekly: trends.weekly, daily: trends.daily, h4: trends.h4,
           });
         }
       }
