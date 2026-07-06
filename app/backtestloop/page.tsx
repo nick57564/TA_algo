@@ -979,7 +979,8 @@ export default function BacktestLoopPage() {
           </div>
         )}
         {candles.length > 0 ? (
-          <CandleChart candles={candles} signals={markers} regimeLine={regimeLine} height={480}
+          <CandleChart candles={candles} signals={markers} regimeLine={regimeLine}
+            regimeTitle={activeStep === 3 ? "50 EMA" : undefined} height={480}
             highlightTrade={highlightTrade} tradeRanges={tradeRanges} onTradeClick={selectTrade} />
         ) : (
           <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 10 }}>

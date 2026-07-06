@@ -42,13 +42,14 @@ interface Props {
   maLine?: MAPoint[];
   maLabel?: string;
   regimeLine?: RegimePoint[];
+  regimeTitle?: string;   // e.g. "50 EMA" — shown as axis label on the regime line
   height?: number;
   highlightTrade?: HighlightTrade | null;
   tradeRanges?: TradeRange[];
   onTradeClick?: (idx: number) => void;
 }
 
-export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", regimeLine, height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
+export default function CandleChart({ candles, signals = [], maLine, maLabel = "200 MA", regimeLine, regimeTitle, height = 500, highlightTrade, tradeRanges = [], onTradeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   const seriesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -134,17 +135,21 @@ export default function CandleChart({ candles, signals = [], maLine, maLabel = "
         }
       }
       const trendColor: Record<string, string> = { bullish: "#10b981", bearish: "#ef4444", neutral: "#64748b" };
-      for (const seg of segs) {
-        if (seg.pts.length < 2) continue;
+      const lastSegIdx = segs.length - 1;
+      segs.forEach((seg, si) => {
+        if (seg.pts.length < 2) return;
+        const isLast = si === lastSegIdx;
         const s = chart.addSeries(LineSeries, {
           color: trendColor[seg.trend] ?? "#64748b",
           lineWidth: 3,
           priceLineVisible: false,
-          lastValueVisible: false,
+          // Label the line on the price axis (e.g. "50 EMA") via the last segment
+          lastValueVisible: isLast && !!regimeTitle,
+          title: isLast && regimeTitle ? regimeTitle : undefined,
           crosshairMarkerVisible: false,
         });
         s.setData(seg.pts);
-      }
+      });
     }
 
     // 200-day MA line
